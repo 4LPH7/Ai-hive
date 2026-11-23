@@ -81,6 +81,22 @@ class LintTest(unittest.TestCase):
         note(self.root, "journal/2026-11-20.md", type="journal")
         self.assertEqual(codes(self.run_lint()), ["orphan"])
 
+    def test_journal_headers_follow_the_entry_format(self):
+        note(self.root, "journal/2026-11-23.md", "# d\n\n## 09:15 claude - ai-hive\nok\n\n"
+             "## 10:00 codex - offmesh | fix\nok\n\n## random heading\n", type="journal")
+        found = [f for f in self.run_lint() if f.code == "journal-header"]
+        self.assertEqual([f.message for f in found],
+                         ["'## random heading' is not '## HH:MM <agent> - <project> [| <kind>]'"])
+
+    def test_source_required_on_new_agent_notes_only(self):
+        note(self.root, "inbox/new.md", updated="2026-11-23")
+        note(self.root, "inbox/old.md", updated="2026-11-20")
+        note(self.root, "inbox/sourced.md", "---\n", updated="2026-11-23")
+        (self.root / "inbox/sourced.md").write_text(
+            FM.format(type="note", status="active", updated="2026-11-23").replace("---\n", "---\nsource: commit abc\n", 1),
+            encoding="utf-8")
+        self.assertEqual([f.path for f in self.run_lint() if f.code == "source-missing"], ["inbox/new.md"])
+
     def test_format_sorts_by_severity(self):
         note(self.root, "a.md", fm=False)
         note(self.root, "projects/demo/adrs/0001-a.md", type="adr")

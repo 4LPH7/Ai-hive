@@ -25,8 +25,11 @@ STALE_DAYS = 30  # an active project-memory untouched this long probably no long
 CONVENTIONAL_NAMES = {"_memory", "playbook"}  # repeated per project by design
 SKIP = hive.SKIP_DIRS - {"_attachments"}  # attachments are link targets, not notes
 SEVERITY_ORDER = {"ERROR": 0, "WARN": 1, "INFO": 2}
+SOURCE_RULE_FROM = "2026-11-23"  # `source:` became required on agent-written notes this day; older notes are exempt
+SOURCED_PREFIXES = ("projects/", "inbox/")
 
 LINK = re.compile(r"!?\[\[([^\]]+)\]\]")
+JOURNAL_HEADER = re.compile(r"^## \d{2}:\d{2} [a-z]+ - \S.*?( \| [a-z-]+)?$")
 FENCE = re.compile(r"^(```|~~~).*?^\1", re.M | re.S)
 INLINE_CODE = re.compile(r"`[^`\n]*`")
 ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -92,7 +95,17 @@ def check_frontmatter(rel, meta, has_frontmatter):
     updated = meta.get("updated", "")
     if updated and not ISO_DATE.match(updated):
         out.append(Finding("ERROR", "bad-date", rel, f"updated: {updated!r} is not YYYY-MM-DD"))
+    if (meta.get("type") in ("adr", "note") and meta.get("agent") != "user" and rel.startswith(SOURCED_PREFIXES)
+            and updated >= SOURCE_RULE_FROM and not meta.get("source")):
+        out.append(Finding("WARN", "source-missing", rel, "agent-written note needs `source:` (commit, session, URL or file)"))
     return out
+
+
+def check_journal(rel, body):
+    if not rel.startswith("journal/"):
+        return []
+    return [Finding("WARN", "journal-header", rel, f"{line!r} is not '## HH:MM <agent> - <project> [| <kind>]'")
+            for line in body.splitlines() if line.startswith("## ") and not JOURNAL_HEADER.match(line)]
 
 
 def check_size_and_age(rel, meta, text, today):
@@ -121,6 +134,7 @@ def lint(vault=hive.VAULT, today=None):
         meta, _, body = hive.parse_note(text)
         findings += check_frontmatter(rel, meta, text.startswith("---"))
         findings += check_size_and_age(rel, meta, text, today)
+        findings += check_journal(rel, body)
         outbound[rel] = set()
         for target in links_in(body):
             hits = resolver.resolve(target)
