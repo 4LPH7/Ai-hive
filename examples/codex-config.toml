@@ -1,0 +1,4 @@
+# Append to ~/.codex/config.toml
+[mcp_servers.hive]
+command = 'C:\Python315\python.exe'
+args = ['-I', 'D:\PROJECTS\ai-hive\hive.py', 'serve']

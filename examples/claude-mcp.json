@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "hive": {
+      "type": "stdio",
+      "command": "C:\\Python315\\python.exe",
+      "args": ["-I", "D:\\PROJECTS\\ai-hive\\hive.py", "serve"],
+      "env": {}
+    }
+  }
+}

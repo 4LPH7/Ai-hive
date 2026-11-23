@@ -1,0 +1,7 @@
+{
+  "operations": [
+    {"type": "ADD", "section": "commands", "content": "Run python hive.py lint before ending a session that wrote notes; fix every ERROR it reports."},
+    {"type": "ADD", "section": "pitfalls", "content": "Shells can collapse backslashes in inline JSON; write ace.py deltas to a file and use forward slashes in paths."}
+  ],
+  "bullet_tags": []
+}

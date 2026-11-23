@@ -1,0 +1,6 @@
+[
+  {"q": "which database did we choose and why", "project": "demo", "expect": ["projects/demo/adrs/0001-sqlite-over-postgres.md"]},
+  {"q": "how do I run the demo tests", "project": "demo", "expect": ["projects/demo/_memory.md"]},
+  {"q": "what is in flight across all projects", "expect": ["_meta/active-work.md"]},
+  {"q": "rule about storing secrets", "expect": ["AGENTS.md"]}
+]
