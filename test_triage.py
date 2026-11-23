@@ -86,9 +86,12 @@ class TriageTest(unittest.TestCase):
         torn = {"answer": "noise", "confidence": 0.4, "prediction_set": ["noise", "status"], "abstain": False}
         s = triage.summarize({"answers": {"project": sure, "kind": torn}, "latency_ms": 400}, qs)
         self.assertEqual((s["project"]["answer"], s["kind"]["p"], s["route"]), ("demo", 0.4, "review"))
-        s = triage.summarize({"answers": {"project": sure, "kind": {**torn, "prediction_set": ["noise"]}}}, qs)
+        s = triage.summarize({"answers": {"project": sure, "kind": {**torn, "prediction_set": ["noise"], "confidence": 0.8}}}, qs)
         self.assertEqual(s["route"], "auto")
         s = triage.summarize({"answers": {"project": {**sure, "abstain": True}, "kind": sure}}, qs)
+        self.assertEqual(s["route"], "review")
+        # seen live: a singleton prediction set at 28% confidence; uncalibrated sets are not enough
+        s = triage.summarize({"answers": {"project": {**sure, "confidence": 0.28}, "kind": sure}}, qs)
         self.assertEqual(s["route"], "review")
 
     def test_bundle_key_changes_only_with_the_questions(self):

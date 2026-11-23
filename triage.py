@@ -26,6 +26,7 @@ LABELS = STATE / "labels.jsonl"        # confirmed answers: the human-verified t
 PROPOSALS = STATE / "proposals.json"   # last scan, so `confirm <note>` without overrides accepts it
 REPORT = "inbox/_triage.md"
 MAX_CHARS = 3000  # the reader sees title + start of body; captures state their point early
+MIN_CONFIDENCE = 0.6  # below this, review even if the prediction set is a singleton (see summarize)
 GLOBAL = "global"
 KINDS = {
     "decision": "a lasting technical or product choice, with its reasons (an ADR candidate)",
@@ -164,13 +165,14 @@ def learner(vault):
 
 def summarize(result, qs):
     """Normalise one Learner.decide() result to answer, probability and route per question.
-    Route is the model card's unlabelled rule: review when Laya abstains or its conformal
-    prediction set holds more than one option. Never gate on the raw confidence number."""
+    Route follows the model card's unlabelled rule (review when Laya abstains or its conformal
+    prediction set holds more than one option), plus a confidence floor: on 2026-11-23 the
+    uncalibrated learner gave singleton sets at 26-28% confidence for two wrong answers."""
     out, route = {}, "auto"
     for q in qs:
         r = result["answers"][q]
         out[q] = {"answer": r["answer"], "p": float(r.get("confidence") or 0.0)}
-        if r.get("abstain") or len(r.get("prediction_set") or [r["answer"]]) > 1:
+        if r.get("abstain") or len(r.get("prediction_set") or [r["answer"]]) > 1 or out[q]["p"] < MIN_CONFIDENCE:
             route = "review"
     out["route"] = route
     return out
