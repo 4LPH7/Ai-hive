@@ -10,7 +10,8 @@ from datetime import date
 from pathlib import Path
 from typing import NamedTuple
 
-import hive
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # `python -I` drops the script dir; hive.py sits beside us
+import hive  # noqa: E402
 
 ALLOWED = {
     "type": {"project-memory", "adr", "journal", "note"},
@@ -33,6 +34,7 @@ JOURNAL_HEADER = re.compile(r"^## \d{2}:\d{2} [a-z]+ - \S.*?( \| [a-z-]+)?$")
 FENCE = re.compile(r"^(```|~~~).*?^\1", re.M | re.S)
 INLINE_CODE = re.compile(r"`[^`\n]*`")
 ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+WHAT_IT_IS = re.compile(r"^## What it is\b", re.M)
 
 
 class Finding(NamedTuple):
@@ -46,7 +48,11 @@ def walk(vault):
     """Yield vault-relative posix paths of every file outside skipped dirs."""
     stack = [Path(vault)]
     while stack:
-        for entry in os.scandir(stack.pop()):
+        try:
+            entries = list(os.scandir(stack.pop()))
+        except PermissionError:  # an unreadable folder is not a vault note; skip it
+            continue
+        for entry in entries:
             if entry.is_dir(follow_symlinks=False):
                 if entry.name not in SKIP:
                     stack.append(Path(entry.path))
@@ -120,6 +126,9 @@ def check_size_and_age(rel, meta, text, today):
         age = (date.fromisoformat(today) - date.fromisoformat(updated)).days
         if age > STALE_DAYS:
             out.append(Finding("WARN", "stale", rel, f"updated {age} days ago; verify it still matches the project"))
+    if rel.endswith("/_memory.md") and not WHAT_IT_IS.search(text):
+        out.append(Finding("WARN", "memory-undescribed", rel,
+                           "no '## What it is' section: search cannot match the project by what it is"))
     return out
 
 

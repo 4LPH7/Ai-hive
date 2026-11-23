@@ -28,7 +28,7 @@ TYPE_PRIOR = {"project-memory": 1.4, "adr": 1.25, "note": 1.0, "journal": 0.8}
 STATUS_PRIOR = {"superseded": 0.3, "archived": 0.4}
 SCHEMA_VERSION = 2
 PROJECT_BOOST = 2.0  # eval 2026-11-16: 1.5 -> 28/30, 2.0 -> 29/30 (higher gives no further gain)
-AUTOCUT_RATIO = 0.35  # keep hits >= 35% of the best; eval 2026-11-16: recall unchanged, 35% fewer hits
+AUTOCUT_RATIO = 0.30  # keep hits >= 30% of the best; eval 2026-11-23: 0.35 cut a rank-4 answer (29/30), 0.30 -> 30/30, +0.3 hits
 TOKEN_CHARS = 4  # ponytail: chars/4 token estimate; swap for a tokenizer if budgets drift
 
 
@@ -320,13 +320,16 @@ def fmt_node(n, seed=False):
 _INDEX = None
 
 
-def ace():
-    """ace.py sits next to this file; `python -I` drops the script dir from sys.path, so add it."""
+def sibling(name):
+    """Import ace.py or lint.py from next to this file; `python -I` drops the script dir from sys.path."""
     here = str(Path(__file__).resolve().parent)
     if here not in sys.path:
         sys.path.insert(0, here)
-    import ace as module
-    return module
+    return __import__(name)
+
+
+def ace():
+    return sibling("ace")
 
 
 def index():
@@ -443,7 +446,7 @@ def tool_context(project, task="", budget=1500):
 
 
 def tool_lint():
-    import lint  # lint imports hive, so load it lazily
+    lint = sibling("lint")  # lint imports hive, so load it lazily
     return lint.format_report(lint.lint(VAULT))
 
 
