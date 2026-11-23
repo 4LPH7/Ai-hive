@@ -58,7 +58,9 @@ class TriageTest(unittest.TestCase):
             {"project": "global", "kind": "status"},    # journal entry for all
             {"project": "global", "kind": "lesson"},    # global playbook bullet
         ]))
-        self.assertFalse(any("sqlite-vec" in text for text, _ in triage.vault_examples(self.root)))
+        texts = [text for text, _ in triage.vault_examples(self.root)]
+        self.assertFalse(any("sqlite-vec" in t for t in texts))
+        self.assertIn("fixed it", texts)  # journal entry body without its header, which names the project
 
     def test_inbox_items_skip_the_report(self):
         note(self.root, triage.REPORT, "# report\n")
@@ -79,10 +81,22 @@ class TriageTest(unittest.TestCase):
 
     def test_summarize_routes_review_when_any_question_is_unsure(self):
         qs = triage.questions(self.root)
-        result = {"project": {"answer": "demo", "probability": 0.9, "route": "auto"},
-                  "kind": {"answer": "noise", "probability": 0.4, "route": "review"}}
-        s = triage.summarize(result, qs)
+        # shape of vegaml Learner.decide() in laya 0.5.3
+        sure = {"answer": "demo", "confidence": 0.9, "prediction_set": ["demo"], "abstain": False}
+        torn = {"answer": "noise", "confidence": 0.4, "prediction_set": ["noise", "status"], "abstain": False}
+        s = triage.summarize({"answers": {"project": sure, "kind": torn}, "latency_ms": 400}, qs)
         self.assertEqual((s["project"]["answer"], s["kind"]["p"], s["route"]), ("demo", 0.4, "review"))
+        s = triage.summarize({"answers": {"project": sure, "kind": {**torn, "prediction_set": ["noise"]}}}, qs)
+        self.assertEqual(s["route"], "auto")
+        s = triage.summarize({"answers": {"project": {**sure, "abstain": True}, "kind": sure}}, qs)
+        self.assertEqual(s["route"], "review")
+
+    def test_bundle_key_changes_only_with_the_questions(self):
+        first = triage.bundle_path(triage.questions(self.root))
+        note(self.root, "journal/2026-11-21.md", "# d\n\n## 09:00 claude - demo\nmore\n", type="journal")
+        self.assertEqual(triage.bundle_path(triage.questions(self.root)), first)
+        note(self.root, "projects/other/_memory.md", "# other\nAnother app.\n", type="project-memory")
+        self.assertNotEqual(triage.bundle_path(triage.questions(self.root)), first)
 
     def test_report_is_a_lint_clean_proposal_note(self):
         rows = [{"note": "inbox/idea.md", "project": {"answer": "demo", "p": 0.91},

@@ -10,6 +10,7 @@ Runs in the Laya venv (Python 3.12, torch CPU), not the hive's stdlib interprete
     ... triage.py confirm inbox/<note>.md [project=<slug>] [kind=<kind>]   no overrides = accept the proposal
     ... triage.py eval                                                     held-out accuracy on vault labels
 """
+import hashlib
 import json
 import os
 import random
@@ -86,7 +87,9 @@ def vault_examples(vault):
         for i, m in enumerate(starts):
             end = starts[i + 1].start() if i + 1 < len(starts) else len(body)
             project = m.group(1) if m.group(1) in slugs else GLOBAL
-            out.append((body[m.start():end].strip()[:MAX_CHARS], {"project": project, "kind": "status"}))
+            entry = body[m.end():end].split("\n", 1)[-1].strip()  # drop the header: it names the answer
+            if entry:
+                out.append((entry[:MAX_CHARS], {"project": project, "kind": "status"}))
     for playbook in [vault / "_meta" / "playbook.md", *sorted(vault.glob("projects/*/playbook.md"))]:
         project = playbook.parent.name if playbook.parent.parent.name == "projects" else GLOBAL
         if playbook.is_file():
@@ -128,20 +131,46 @@ def render_report(rows, stamp):
 
 # ------------------------------------------------------------ Laya (heavy imports from here on)
 
+def bundle_path(qs):
+    """One fitted bundle per question set: a new project changes the options and forces a refit."""
+    key = hashlib.sha256(json.dumps(qs, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    return STATE / f"bundle-{key}.zip"
+
+
 def learner(vault):
+    """Load the cached bundle and teach it confirmations it has not seen; fit from scratch only when the
+    questions changed (fitting reads every example through the reader: minutes on CPU)."""
     from laya import Learner  # torch + reader model; imported only when deciding
     qs = questions(vault)
-    return Learner(qs, examples=vault_examples(vault) + confirmed_labels(qs), auto=False), qs
+    labels = confirmed_labels(qs)
+    bundle, seen_file = bundle_path(qs), STATE / "bundle-seen.json"
+    seen = json.loads(seen_file.read_text(encoding="utf-8")).get(bundle.name, 0) if seen_file.is_file() else 0
+    if bundle.is_file():
+        model = Learner(bundle=str(bundle), auto=False)
+        for text, answers in labels[seen:]:
+            model.feedback(text, answers, correction=True)
+        if len(labels) > seen:
+            model.step(min_rows=1)
+    else:
+        model = Learner(qs, examples=vault_examples(vault) + labels, auto=False)
+        for old in STATE.glob("bundle-*.zip"):
+            old.unlink()
+    if not bundle.is_file() or len(labels) > seen:
+        STATE.mkdir(parents=True, exist_ok=True)
+        model.save_bundle(str(bundle))
+        seen_file.write_text(json.dumps({bundle.name: len(labels)}), encoding="utf-8")
+    return model, qs
 
 
 def summarize(result, qs):
-    """Normalise one Learner.decide() answer per question to answer, probability and route."""
+    """Normalise one Learner.decide() result to answer, probability and route per question.
+    Route is the model card's unlabelled rule: review when Laya abstains or its conformal
+    prediction set holds more than one option. Never gate on the raw confidence number."""
     out, route = {}, "auto"
     for q in qs:
-        r = result[q]
-        p = float(r.get("probability", r.get("confidence", 0.0)) or 0.0)
-        out[q] = {"answer": r["answer"], "p": p}
-        if r.get("route", "auto") != "auto" or r.get("abstain"):
+        r = result["answers"][q]
+        out[q] = {"answer": r["answer"], "p": float(r.get("confidence") or 0.0)}
+        if r.get("abstain") or len(r.get("prediction_set") or [r["answer"]]) > 1:
             route = "review"
     out["route"] = route
     return out
