@@ -1,2 +1,0 @@
-# Only for triage.py, installed into a separate Python 3.12 venv. hive.py, ace.py and lint.py need no packages.
-laya==0.5.3

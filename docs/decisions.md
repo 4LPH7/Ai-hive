@@ -19,10 +19,7 @@ records what was chosen, what was rejected, and the evidence.
 | Stop hook asks the live agent to reflect | Background `claude -p` reflector | Headless sign-in was not available; the live agent also has the full session evidence |
 | Deterministic lint before any LLM gardener | An LLM that "cleans up" the vault | Rule checks are free, exact and explainable; they catch most rot (caps, links, frontmatter) |
 | `source:` required on new agent notes | Trusting agent-written claims | Self-written memory compounds errors; traceable claims can be checked and superseded |
-| Laya proposes, never moves | Auto-filing inbox notes | Measured: the first real scan was wrong on both notes at under 30% confidence, yet the uncalibrated prediction set said `auto`. Trust has to be earned with confirmations |
-| Laya in its own Python 3.12 venv | Adding torch to the hive's interpreter | Keeps the MCP server dependency-free and fast to start; the model is optional |
-| Laya training labels harvested from the vault | Starting from zero | Every ADR, `_memory.md`, journal entry and playbook bullet already has a known project and kind |
-| Fitted Laya model cached per question set | Refit on every scan | A CPU fit takes about 15 minutes; deciding takes 0.5 s |
+| No ML model for inbox triage; you triage `inbox/` | [Laya](https://huggingface.co/convaiinnovations/laya) decision model proposing project and kind (tried and removed 2026-11-23) | On real inbox notes it was wrong on both at under 30% confidence while its uncalibrated gate said `auto`; it needed 30-40+ confirmations, a 4 GB torch venv and 15-minute CPU refits to sort a handful of notes. Not worth it at this vault size |
 | Personal eval set kept out of the repo | Shipping the author's golden questions | They describe private projects; `examples/eval_golden.example.json` shows the format |
 
 ## Not built yet, and when it would be worth it
@@ -32,5 +29,4 @@ records what was chosen, what was rejected, and the evidence.
 | Embedding search | Recall@5 on your golden set drops below about 0.9, or the vault passes a few thousand notes |
 | Symbol leases between agents | Two agents regularly edit the same repository at the same time |
 | Commit-driven staleness of notes anchored to code symbols | Notes start naming functions that have changed; graphify gives start lines but not ranges, so this needs range data first |
-| Laya auto-filing of `route=auto` inbox notes | At least 40 confirmed answers show measured precision of 95% or better on real inbox captures |
-| Laya calibration (`Learner.calibrate`) | You have 30+ confirmed rows not used for fitting |
+| Automated inbox triage | The inbox regularly holds dozens of unsorted notes; an agent pass with `hive_search` context is cheaper to try than a trained model |

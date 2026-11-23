@@ -11,14 +11,12 @@ uses can be changed with an environment variable:
 | `HIVE_DB` | `%LOCALAPPDATA%\hive\hive.sqlite` | Disposable search index |
 | `HIVE_ACE_STATE` | `%LOCALAPPDATA%\hive\ace-state.json` | Stop-hook counters |
 | `HIVE_ACE_DISABLE` | unset | Set to `1` to silence the Stop-hook reflection prompt |
-| `HIVE_LAYA_STATE` | `%LOCALAPPDATA%\hive\laya` | Laya bundle, proposals and confirmed labels |
 
 ## Step 1: Requirements
 
 - Python 3.10 or newer for the hive itself (no packages).
 - Git, and an Obsidian vault in a git repository (Obsidian is only a viewer; it never needs to be running).
 - Optional: [graphify](https://docs.graphify.com) for code graphs: `uv tool install graphifyy`.
-- Optional: Python 3.12 and about 4 GB of disk for Laya triage (Step 8).
 
 ## Step 2: Get the code and run the tests
 
@@ -130,24 +128,7 @@ with `hive-ace`.
 Codex and Antigravity have no equivalent hook wired here; `AGENTS.md` asks them to run `hive-ace` at
 session end.
 
-## Step 8: Add Laya inbox triage (optional)
-
-```bash
-mkdir D:\PROJECTS\ai-hive-laya && cd D:\PROJECTS\ai-hive-laya
-uv venv --python 3.12 .venv
-uv pip install --python .venv\Scripts\python.exe -r D:\PROJECTS\ai-hive\requirements-laya.txt
-set HF_HOME=D:\PROJECTS\ai-hive-laya\hf          # about 2 GB of model files; keep it off a full C: drive
-
-cd D:\PROJECTS\ai-hive
-D:\PROJECTS\ai-hive-laya\.venv\Scripts\python.exe triage.py eval    # held-out accuracy on your vault
-D:\PROJECTS\ai-hive-laya\.venv\Scripts\python.exe triage.py scan    # writes inbox/_triage.md
-```
-
-The first `eval` or `scan` downloads the reader model and fits on your vault's labelled notes (about
-15 minutes on a laptop CPU). Later scans load the cached fit and take under a minute. Read
-[laya-triage.md](laya-triage.md) before relying on it.
-
-## Step 9: Keep it healthy
+## Step 8: Keep it healthy
 
 Create your own search golden set once you have a dozen notes: copy `examples/eval_golden.example.json` to
 `eval_golden.json` (gitignored, it describes your projects) and write 20-30 questions you actually ask, each
@@ -158,7 +139,6 @@ with the note paths that should answer it.
 | Before changing search ranking | `python hive.py eval` (keep Recall@5 at least where it was) |
 | After writing notes | `python hive.py lint` (fix every ERROR) |
 | After code structure changes | `graphify update .` in the repo |
-| Weekly | `triage.py scan`, then confirm or correct the proposals |
 | After moving the index or schema change | delete `hive.sqlite`; it rebuilds on the next call |
 
 ## Troubleshooting
@@ -168,5 +148,3 @@ with the note paths that should answer it.
 - **JSON errors from `ace.py apply`:** shells can collapse backslashes. Write the delta to a file and use
   forward slashes in paths inside it.
 - **`hive_graph` says the graph is stale:** run `graphify update .` in that repository.
-- **Laya proposals look wrong:** that is expected before you have confirmed a few dozen answers; the report
-  marks uncertain ones `review`. See [laya-triage.md](laya-triage.md#limits).

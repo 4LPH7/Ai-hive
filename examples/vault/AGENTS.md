@@ -63,7 +63,7 @@ Skip all of this for trivial sessions (a typo, a one-off question). Write only w
   ---
   type: project-memory | adr | journal | note
   project: <slug>
-  agent: claude | codex | antigravity | user | laya
+  agent: claude | codex | antigravity | user
   status: active | superseded | archived
   updated: YYYY-MM-DD
   source: <commit SHA, session, URL or file path the claims come from>

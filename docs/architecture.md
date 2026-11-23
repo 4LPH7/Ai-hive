@@ -1,7 +1,7 @@
 # Architecture
 
-ai-hive is four small programs around one rule: **Markdown in the vault is the only source of truth.**
-Everything else (the search index, the loaded graphs, Laya's fitted model) is derived, disposable and rebuilt
+ai-hive is three small programs around one rule: **Markdown in the vault is the only source of truth.**
+Everything else (the search index, the loaded graphs) is derived, disposable and rebuilt
 from disk.
 
 ## Components
@@ -11,10 +11,8 @@ from disk.
 | MCP server + CLI | `hive.py` | One stdio process per agent session | Only the disposable index (`%LOCALAPPDATA%\hive\hive.sqlite`) |
 | ACE curator | `ace.py` | CLI, Claude Code hooks, the `hive-ace` skill | Playbook notes (`_meta/playbook.md`, `projects/<slug>/playbook.md`) |
 | Vault lint | `lint.py` | CLI and `hive_lint` tool | Nothing (read-only report) |
-| Inbox triage | `triage.py` | CLI in a separate Python 3.12 venv | `inbox/_triage.md` and state outside the vault |
 
-`hive.py`, `ace.py` and `lint.py` use only the Python standard library (3.10+). `triage.py` imports Laya
-lazily, so its pure functions are tested by the same stdlib test run.
+All three use only the Python standard library (3.10+).
 
 ## Data flow
 
@@ -33,8 +31,6 @@ lazily, so its pure functions are tested by the same stdlib test run.
                                           │
                 session ends / Stop hook  ▼
                          skill hive-ace ──► ace.py apply ──► playbook notes
-                                          
- inbox/*.md ──► triage.py (Laya) ──► inbox/_triage.md ──► you confirm ──► labels.jsonl ──► Laya learns
 ```
 
 ## Vault index and search (`hive.py`, class `Index`)
@@ -93,7 +89,5 @@ returns `isError: true` instead of killing the server.
 | Vault search | about 3 ms |
 | Graph load / hub query, 3,427 nodes | 114 ms / 60 ms |
 | Graph load / hub query, 1,698 nodes | 39 ms / 10 ms |
-| Laya decision per note (CPU) | about 0.5 s |
-| Laya fit from scratch, 76 examples (CPU) | about 15 min, cached afterwards |
 
 Run `python hive.py bench` for your own numbers.

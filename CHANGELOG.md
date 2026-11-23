@@ -6,10 +6,10 @@
   caps, broken wikilinks (including Obsidian's table-escaped aliases), stale project memory, superseded ADRs
   without a successor link, ambiguous note names, orphan project notes, journal header format, and `source:` on
   new agent-written notes.
-- **Laya inbox triage** (`triage.py`): proposes project and kind for each inbox note using laya 0.5.3's
-  Learner, trained on labels harvested from the vault, improved by confirmed answers. Proposals only.
-  Review routing adds a 0.6 confidence floor after the first real scan showed singleton prediction sets at
-  28% confidence.
+- **Laya inbox triage tried and removed:** a laya 0.5.3 Learner trained on vault labels scored 95% on held-out
+  vault notes but got both real inbox notes wrong at under 30% confidence while its gate said `auto`. It needed
+  a 4 GB torch venv, 15-minute CPU refits and dozens of confirmations to sort a handful of notes. See
+  `docs/decisions.md`.
 - Repository published with documentation, examples and CI.
 
 ## 2026-11-20

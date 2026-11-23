@@ -15,7 +15,7 @@ exists. `lint.py` enforces the parts that can be checked mechanically.
 | `projects/<slug>/adrs/NNNN-title.md` | One decision per file | Create; never rewrite; supersede | Decisions keep their original reasoning |
 | `projects/<slug>/playbook.md`, `_meta/playbook.md` | ACE lessons | Only via `ace.py apply` | Deterministic merges prevent context collapse |
 | `journal/YYYY-MM-DD.md` | Session log | **Append** only | Chronological record across agents |
-| `inbox/` | Unsorted captures | Create; you (helped by Laya) triage | Nothing lands in canonical notes unreviewed |
+| `inbox/` | Unsorted captures | Create; you triage | Nothing lands in canonical notes unreviewed |
 | `templates/` | Note templates | Edit only on purpose | Keeps frontmatter uniform |
 
 `<slug>` is the code folder name, lowercased, spaces to hyphens.
@@ -26,7 +26,7 @@ exists. `lint.py` enforces the parts that can be checked mechanically.
 ---
 type: project-memory | adr | journal | note
 project: <slug> | all
-agent: claude | codex | antigravity | user | laya
+agent: claude | codex | antigravity | user
 status: active | superseded | archived
 updated: YYYY-MM-DD
 source: <commit SHA, session, URL or file path>

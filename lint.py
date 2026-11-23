@@ -15,7 +15,7 @@ import hive
 ALLOWED = {
     "type": {"project-memory", "adr", "journal", "note"},
     "status": {"active", "superseded", "archived"},
-    "agent": {"claude", "codex", "antigravity", "user", "laya"},
+    "agent": {"claude", "codex", "antigravity", "user"},
 }
 REQUIRED = ("type", "project", "agent", "status", "updated")
 EXEMPT_FRONTMATTER = {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}  # root manual and its pointers
