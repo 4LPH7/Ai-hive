@@ -6,6 +6,7 @@ and graphify code graphs. Stdlib only (Python 3.10+), read-only, MCP over stdio.
     python hive.py graph <repo> "query"       ranked code-graph neighbourhood
     python hive.py context <project> ["task"] token-budgeted session pack
     python hive.py status                     index and graph freshness
+    python hive.py lint                       vault health report (see lint.py)
 """
 import json
 import math
@@ -441,6 +442,11 @@ def tool_context(project, task="", budget=1500):
     return pack(parts, int(budget))
 
 
+def tool_lint():
+    import lint  # lint imports hive, so load it lazily
+    return lint.format_report(lint.lint(VAULT))
+
+
 def tool_status():
     idx = index()
     idx.refresh(force=True)
@@ -476,6 +482,10 @@ TOOLS = {
                     "query": ("string", "Symbol names or keywords"), "limit": ("integer", "Max symbols (default 15)")},
                    ["repo", "query"]),
     "hive_status": (tool_status, "Index size per project and freshness of each repo's code graph.", {}, []),
+    "hive_lint": (tool_lint,
+                  "Vault health against AGENTS.md rules: frontmatter, line caps, broken links, stale memory, "
+                  "superseded ADRs without successor, ambiguous names, orphans. Run before session end after writing notes.",
+                  {}, []),
 }
 
 SERVER_INFO = {"name": "hive", "version": "1.0.0"}
@@ -606,7 +616,7 @@ def main(argv):
     cmd, *rest = argv or ["serve"]
     if cmd == "serve":
         return serve()
-    commands = {"search": tool_search, "graph": tool_graph, "context": tool_context, "status": tool_status, "bench": bench, "eval": tool_eval}
+    commands = {"search": tool_search, "graph": tool_graph, "context": tool_context, "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval}
     if cmd not in commands:
         print(__doc__)
         return 2
