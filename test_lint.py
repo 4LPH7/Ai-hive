@@ -95,6 +95,7 @@ class LintTest(unittest.TestCase):
         (self.root / "inbox/sourced.md").write_text(
             FM.format(type="note", status="active", updated="2026-11-23").replace("---\n", "---\nsource: commit abc\n", 1),
             encoding="utf-8")
+        note(self.root, "projects/demo/playbook.md", updated="2026-11-23")  # written by ace.py, not a claim
         self.assertEqual([f.path for f in self.run_lint() if f.code == "source-missing"], ["inbox/new.md"])
 
     def test_format_sorts_by_severity(self):

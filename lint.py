@@ -96,6 +96,7 @@ def check_frontmatter(rel, meta, has_frontmatter):
     if updated and not ISO_DATE.match(updated):
         out.append(Finding("ERROR", "bad-date", rel, f"updated: {updated!r} is not YYYY-MM-DD"))
     if (meta.get("type") in ("adr", "note") and meta.get("agent") != "user" and rel.startswith(SOURCED_PREFIXES)
+            and Path(rel).stem not in CONVENTIONAL_NAMES  # playbooks are machine-merged by ace.py
             and updated >= SOURCE_RULE_FROM and not meta.get("source")):
         out.append(Finding("WARN", "source-missing", rel, "agent-written note needs `source:` (commit, session, URL or file)"))
     return out
