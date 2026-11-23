@@ -43,8 +43,9 @@ All three use only the Python standard library (3.10+).
   - a type prior: project-memory 1.4, adr 1.25, note 1.0, journal 0.8
   - a status prior: superseded 0.3, archived 0.4
   - a project boost of 2.0 when the note belongs to the requested project
-- **Autocut:** hits scoring below 35% of the best are dropped, so agents do not read noise.
-- Tuned against a golden question set (`python hive.py eval`): Recall@5 0.97.
+- **Autocut:** hits scoring below 30% of the best are dropped, so agents do not read noise. At 35% it cut a
+  correct rank-4 answer; 30% keeps it and adds only 0.3 hits per query on average.
+- Tuned against a golden question set (`python hive.py eval`): Recall@5 1.00 (30/30), MRR 0.833.
 
 The index lives outside the vault and carries a schema version; a version change drops and rebuilds it.
 

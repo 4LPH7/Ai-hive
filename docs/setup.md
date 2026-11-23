@@ -57,6 +57,17 @@ python hive.py status
 python hive.py lint
 ```
 
+Block commits that break the vault rules: copy `examples/vault/.githooks/` into the vault (fix the two paths
+at its top) and enable it once:
+
+```bash
+cd D:\Valut\OBS
+git config core.hooksPath .githooks
+```
+
+Every agent's `git commit` in the vault now runs lint and stops on any ERROR. It lints the whole working
+folder, so fix or remove an untracked broken note before committing anything else.
+
 ## Step 4: Build code graphs (optional)
 
 In each repository:
@@ -125,8 +136,12 @@ with `hive-ace`.
    python ace.py show global
    ```
 
-Codex and Antigravity have no equivalent hook wired here; `AGENTS.md` asks them to run `hive-ace` at
-session end.
+4. Codex: append the `SessionStart` hook from `examples/codex-hooks.json` to `~/.codex/hooks.json` (next to
+   existing entries), then approve it once in Codex with `/hooks`; Codex 0.129+ runs no hook until trusted.
+   Codex then starts each session with the top playbook lessons, like Claude Code.
+
+Reflection at the end of a session is automatic only in Claude Code (`Stop` hook). Codex and Antigravity
+follow the session-end protocol in `AGENTS.md`, which asks them to run `hive-ace`.
 
 ## Step 8: Keep it healthy
 

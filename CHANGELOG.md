@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-23 (later)
+
+- **Fix:** `hive_lint` failed in every agent with `No module named 'lint'`: agents launch `python -I`, which
+  drops the script folder from the import path. `hive.py` and `lint.py` now add it themselves; a test runs
+  both under `-I`.
+- **Search:** autocut 35% -> 30%. It had cut a correct rank-4 answer; golden set Recall@5 0.97 -> 1.00.
+- **Lint:** new `memory-undescribed` warning for a `_memory.md` without `## What it is`; lint skips unreadable
+  folders instead of crashing.
+- **Vault pre-commit hook** (`examples/vault/.githooks/pre-commit`): blocks commits with lint ERRORs.
+- **Codex** gets playbook lessons at session start (`examples/codex-hooks.json`).
+- [Improvements roadmap](docs/improvements.md) for the larger next steps.
+
 ## 2026-11-23
 
 - **Vault lint** (`lint.py`, MCP tool `hive_lint`): frontmatter keys and values, `_memory`/active-work line

@@ -8,6 +8,9 @@ python lint.py [vault]        # exit code 1 if any ERROR
 python hive.py lint           # same report
 ```
 
+Both work under `python -I`, the way agents and git hooks launch them. As a git pre-commit hook
+(`examples/vault/.githooks/pre-commit`), lint blocks any vault commit that has an ERROR.
+
 Agents call it as the `hive_lint` MCP tool before declaring a session done.
 
 ## Checks
@@ -24,6 +27,7 @@ Agents call it as the `hive_lint` MCP tool before declaring a session done.
 | `duplicate-name` | WARN | Two notes share a file name, so `[[name]]` is ambiguous. `_memory` and `playbook` are exempt | Rename one, or link by path |
 | `journal-header` | WARN | A `## ` heading in a journal is not `## HH:MM <agent> - <project> [\| <kind>]` | New entries follow the format; old ones are append-only history |
 | `source-missing` | WARN | An ADR or note written by an agent under `projects/` or `inbox/`, updated on or after 2026-11-23, has no `source:` | Add the commit, session, URL or file the claims come from |
+| `memory-undescribed` | WARN | A `_memory.md` has no `## What it is` section. Without it, search cannot match the project by what it is (a portfolio site's memory scored 0 for "personal website") | Add one or two sentences saying what the project is |
 | `orphan` | INFO | A project note has no inbound links, so it is invisible in Obsidian's graph. Journal and inbox are exempt | Link it from the project's `_memory.md` |
 
 ## Why `source:`

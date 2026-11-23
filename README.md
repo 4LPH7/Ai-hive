@@ -14,7 +14,8 @@ learns reusable lessons from each session.
 - **Self-improving:** ACE playbooks with helpful/harmful counters, merged deterministically, so lessons
   accumulate without being rewritten into vague summaries.
 - **Self-checking:** a lint pass enforces the vault's own rules (line caps, frontmatter, broken links,
-  superseded decisions, sources on agent-written notes).
+  superseded decisions, sources on agent-written notes), and a git pre-commit hook blocks commits that
+  break them.
 
 ```mermaid
 flowchart LR
@@ -47,7 +48,7 @@ flowchart LR
 ```bash
 git clone https://github.com/4LPH7/ai-hive.git
 cd ai-hive
-python -m unittest                       # 41 tests, stdlib only
+python -m unittest                       # 35 tests, stdlib only
 set HIVE_VAULT=D:\path\to\vault          # or export on macOS/Linux
 python hive.py status                    # index the vault, list graphs
 python hive.py search "why sqlite"       # BM25 over notes
@@ -77,7 +78,7 @@ Then register `python -I /path/to/ai-hive/hive.py serve` as an MCP server in eac
 | `python hive.py bench` | Index, search and graph timings |
 | `python ace.py apply <scope> <delta.json>` | Merge a reflection into a playbook |
 | `python ace.py show <scope> ["task"]` | Bullets an agent would be shown |
-| `python ace.py hook-start\|hook-stop` | Claude Code hook entry points |
+| `python ace.py hook-start\|hook-stop` | Hook entry points (Claude Code: both; Codex: hook-start) |
 | `python lint.py [vault]` | Lint report; exit code 1 on any error |
 
 ## Repository layout
@@ -101,11 +102,12 @@ ai-hive/
 4. [ACE playbooks](docs/ace.md): how the hive learns lessons from sessions
 5. [Lint](docs/lint.md): every check, its severity and how to fix it
 6. [Design decisions](docs/decisions.md): what was built, what was rejected, and why
+7. [Improvements roadmap](docs/improvements.md): what is worth building next, and the signal for each
 
 ## Status
 
-Used daily on Windows 11 with a 76-note vault and three graphify graphs (1k-3.5k nodes each).
-Search golden set: Recall@5 0.97.
+Used daily on Windows 11 with a vault of about 55 notes and four graphify graphs (1k-3.5k nodes each).
+Search golden set: Recall@5 1.00 (30/30), MRR 0.833. Worst-case full MCP session: 322 ms.
 
 ## License
 

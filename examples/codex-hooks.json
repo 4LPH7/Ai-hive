@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {"type": "command", "command": "C:/Python315/python.exe -I D:/PROJECTS/ai-hive/ace.py hook-start", "timeout": 10}
+        ]
+      }
+    ]
+  }
+}

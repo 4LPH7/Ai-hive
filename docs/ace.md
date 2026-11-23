@@ -57,8 +57,8 @@ python ace.py apply global delta.json        # or a project slug instead of glob
 ## Read path
 
 - `hive_context` adds the top bullets, ranked by net evidence (helpful minus harmful) times overlap with the task.
-- The Claude Code `SessionStart` hook (`ace.py hook-start`) injects up to 12 bullets for the global scope and
-  the scope of the current folder.
+- The `SessionStart` hook (`ace.py hook-start`) injects up to 12 bullets for the global scope and the scope of
+  the current folder. Wired for Claude Code and Codex (same JSON output format).
 
 ## Triggers
 
