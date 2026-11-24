@@ -79,3 +79,132 @@ fn test_sync_01_hash_verified_refresh() {
     // Clean up
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_rust_concurrent_writers_no_lost_updates() {
+    let tmp = std::env::temp_dir().join(format!("hive_concurrency_test_{}", std::process::id()));
+    let vault = tmp.join("vault");
+    let scope = "concurrency-test";
+
+    let v1 = vault.clone();
+    let t1 = std::thread::spawn(move || {
+        for i in 0..25 {
+            let ops = ai_hive::ace::DeltaOps {
+                add: Some(vec![ai_hive::ace::AddOp {
+                    section: "strategies".to_string(),
+                    content: format!("Thread A bullet {:02}", i),
+                }]),
+                tag: None,
+                remove: None,
+            };
+            ai_hive::ace::apply_with_lock(&v1, scope, &ops).unwrap();
+        }
+    });
+
+    let v2 = vault.clone();
+    let t2 = std::thread::spawn(move || {
+        for i in 0..25 {
+            let ops = ai_hive::ace::DeltaOps {
+                add: Some(vec![ai_hive::ace::AddOp {
+                    section: "pitfalls".to_string(),
+                    content: format!("Thread B bullet {:02}", i),
+                }]),
+                tag: None,
+                remove: None,
+            };
+            ai_hive::ace::apply_with_lock(&v2, scope, &ops).unwrap();
+        }
+    });
+
+    t1.join().unwrap();
+    t2.join().unwrap();
+
+    let sections = ai_hive::ace::load(&vault, scope).unwrap();
+    let total: usize = sections.values().map(|v| v.len()).sum();
+    assert_eq!(total, 50, "Expected all 50 bullets to be preserved under concurrent writes");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_rust_stale_lockfile_recovery_dead_pid() {
+    let tmp = std::env::temp_dir().join(format!("hive_stale_lock_test_{}", std::process::id()));
+    let path = tmp.join("playbook.md");
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let lock_path = path.with_extension("lock");
+    let hostname = ai_hive::ace::get_hostname();
+    // Dead PID 9999999 on local host
+    std::fs::write(&lock_path, format!("9999999:{}:2026-01-01T00:00:00Z:deadbeef\n", hostname)).unwrap();
+
+    let lock = ai_hive::ace::PlaybookLock::acquire(&path, std::time::Duration::from_millis(1500));
+    assert!(lock.is_ok(), "Expected dead-PID stale lock to be stolen");
+
+    drop(lock);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_rust_foreign_host_lock_refused() {
+    let tmp = std::env::temp_dir().join(format!("hive_foreign_lock_test_{}", std::process::id()));
+    let path = tmp.join("playbook.md");
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let lock_path = path.with_extension("lock");
+    // Foreign hostname
+    std::fs::write(&lock_path, "1234:foreign-node-99:2026-01-01T00:00:00Z:beef1234\n").unwrap();
+
+    let lock = ai_hive::ace::PlaybookLock::acquire(&path, std::time::Duration::from_millis(600));
+    assert!(lock.is_err(), "Expected foreign host lock to be refused");
+    let err = lock.unwrap_err();
+    assert!(err.contains("foreign host foreign-node-99"), "Expected foreign host error, got: {}", err);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_ledger_01_rust_record_and_read() {
+    let tmp = std::env::temp_dir().join(format!("hive_ledger_rust_test_{}.jsonl", std::process::id()));
+
+    let ok = ai_hive::ledger::record(
+        &tmp,
+        "query",
+        "demo-project",
+        "how does auth work",
+        &["projects/demo/auth.md".to_string()],
+        &["str-00001".to_string()],
+        8.45,
+        Some("codex"),
+        Some("session-xyz"),
+    );
+    assert!(ok, "Expected record to succeed");
+
+    let entries = ai_hive::ledger::read_ledger(&tmp, None, None);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].event, "query");
+    assert_eq!(entries[0].project, "demo-project");
+    assert_eq!(entries[0].agent, "codex");
+    assert_eq!(entries[0].session_id, "session-xyz");
+    assert_eq!(entries[0].hits, vec!["projects/demo/auth.md"]);
+    assert_eq!(entries[0].injected_bullets, vec!["str-00001"]);
+    assert_eq!(entries[0].duration_ms, 8.45);
+
+    // Fail open test
+    let bad_dir = std::env::temp_dir().join(format!("hive_bad_ledger_dir_{}", std::process::id()));
+    std::fs::create_dir_all(&bad_dir).unwrap();
+    let fail_ok = ai_hive::ledger::record(
+        &bad_dir, // directory instead of file
+        "query",
+        "fail-open",
+        "",
+        &[],
+        &[],
+        0.0,
+        None,
+        None,
+    );
+    assert!(!fail_ok, "Expected directory path to return false without panicking");
+
+    let _ = std::fs::remove_file(&tmp);
+    let _ = std::fs::remove_dir_all(&bad_dir);
+}

@@ -7,3 +7,4 @@ pub mod lint;
 pub mod mcp;
 pub mod eval;
 pub mod bench;
+pub mod ledger;

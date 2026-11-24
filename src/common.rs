@@ -117,6 +117,7 @@ pub struct HiveConfig {
     pub vault: PathBuf,
     pub projects: PathBuf,
     pub db: PathBuf,
+    pub ledger: PathBuf,
 }
 
 pub fn parse_toml_config(content: &str) -> HashMap<String, String> {
@@ -225,7 +226,26 @@ pub fn load_config(
             }
         });
 
-    HiveConfig { vault, projects, db }
+    let ledger = std::env::var("HIVE_LEDGER")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| toml_data.get("ledger").map(PathBuf::from))
+        .unwrap_or_else(|| {
+            if cfg!(windows) {
+                let base = std::env::var("LOCALAPPDATA")
+                    .or_else(|_| std::env::var("TEMP"))
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("."));
+                base.join("hive").join("ledger.jsonl")
+            } else {
+                let cache = std::env::var("XDG_CACHE_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from(&home).join(".cache"));
+                cache.join("hive").join("ledger.jsonl")
+            }
+        });
+
+    HiveConfig { vault, projects, db, ledger }
 }
 
 pub fn default_vault() -> PathBuf {

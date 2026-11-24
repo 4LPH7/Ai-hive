@@ -20,13 +20,13 @@ High-performance, deterministic memory retrieval and playbook curation with Mark
 - ✓ **CONF-01**: Hierarchical unified configuration resolution (CLI -> ENV -> config -> OS cache) [Milestone 2 - F6]
 - ✓ **SYNC-01**: Hash-verified incremental refresh (`size, mtime_ns, SHA-256`) [Milestone 2 - F7]
 - ✓ **SHIM-01**: Cross-agent native binary delegation shims with transparent Python fallback [Milestone 2]
+- ✓ **ACE-01**: ACE counter split: decouple `seen` count from `helpful`/`harmful` feedback [Milestone 3 - F8]
+- ✓ **LOCK-01**: Atomic `O_EXCL` file locking with stale-lock expiration for concurrent ACE merges [Milestone 3 - F9]
+- ✓ **LEDG-01**: Local JSONL session ledger outside vault tracking queries, hits, and injected bullets [Milestone 3]
+- ✓ **HOOK-01**: Cross-agent reflection parity (fail-open Codex stop-hook & Antigravity ledger sync) [Milestone 3]
 
 ### Active
 - [ ] **CI-01**: GitHub Actions matrix running Rust and Python test suites on Ubuntu and Windows [Milestone 2 - F16]
-- [ ] **ACE-01**: ACE counter split: decouple `seen` count from `helpful`/`harmful` feedback [Milestone 3 - F8]
-- [ ] **LOCK-01**: Atomic `O_EXCL` file locking with stale-lock expiration for concurrent ACE merges [Milestone 3 - F9]
-- [ ] **LEDG-01**: Local JSONL session ledger outside vault tracking queries, hits, and injected bullets [Milestone 3]
-- [ ] **HOOK-01**: Cross-agent reflection parity (fail-open Codex stop-hook & Antigravity ledger sync) [Milestone 3]
 
 ### Out of Scope
 - Dual-write to database — violates Markdown as sole truth.

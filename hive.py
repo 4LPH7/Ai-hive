@@ -31,7 +31,7 @@ def canonical_path(p):
     except (ValueError, OSError):
         return Path(p)
 
-def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_config=None):
+def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_ledger=None, cli_config=None):
     """Hierarchical config: CLI flags -> ENV vars -> config.toml -> OS defaults."""
     config_data = {}
     config_file = Path(cli_config) if cli_config else None
@@ -89,10 +89,21 @@ def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_config=None)
             base = xdg_cache or (Path(os.environ.get("HOME", ".")) / ".cache")
             db = str(Path(base) / "hive" / "hive.sqlite")
 
+    ledger = cli_ledger or os.environ.get("HIVE_LEDGER") or config_data.get("ledger")
+    if not ledger:
+        if sys.platform == "win32":
+            base = os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or "."
+            ledger = str(Path(base) / "hive" / "ledger.jsonl")
+        else:
+            xdg_cache = os.environ.get("XDG_CACHE_HOME")
+            base = xdg_cache or (Path(os.environ.get("HOME", ".")) / ".cache")
+            ledger = str(Path(base) / "hive" / "ledger.jsonl")
+
     return {
         "vault": Path(vault),
         "projects": Path(projects),
         "db": Path(db),
+        "ledger": Path(ledger),
     }
 
 
@@ -100,6 +111,7 @@ CFG = load_config()
 VAULT = CFG["vault"]
 PROJECTS = CFG["projects"]
 DB_PATH = CFG["db"]
+LEDGER_PATH = CFG["ledger"]
 SKIP_DIRS = {".git", ".obsidian", ".claude", ".agents", ".trash", "Python", "_attachments", "graph", "node_modules", "templates", "_template", ".claude-flow"}
 REFRESH_EVERY_S = 2.0
 TYPE_PRIOR = {"project-memory": 1.4, "adr": 1.25, "note": 1.0, "journal": 0.8}
@@ -609,8 +621,16 @@ def tool_search(query, project="", scope=None, limit=8):
         scope = "all"
     if scope not in ("project", "all"):
         raise ValueError(f"invalid scope {scope!r}; must be 'project' or 'all'")
+    t0 = time.time()
     slug = validate_slug(project) if project else ""
     hits = index().search(query, slug, int(limit), scope=scope)
+    duration_ms = (time.time() - t0) * 1000.0
+    try:
+        import ledger
+        hit_paths = [h["path"] for h in hits]
+        ledger.record(LEDGER_PATH, event="query", project=slug, query=query, hits=hit_paths, duration_ms=duration_ms)
+    except Exception:
+        pass
     if not hits:
         return "no matching notes"
     return "\n".join(f"- {h['path']} ({h['type']}, {h['status']}, {h['updated']}) {h['title']}\n  {h['snippet']}"
@@ -732,6 +752,7 @@ def pack(sections, budget=1500, weights=None):
 
 
 def tool_context(project, task="", budget=1500):
+    t0 = time.time()
     project = validate_slug(project)
     idx = index()
 
@@ -799,6 +820,14 @@ def tool_context(project, task="", budget=1500):
         "task_notes": task_notes_section,
         "code_graph": code_graph_section,
     }
+    try:
+        import ledger
+        hit_paths = [h["path"] for h in hits] if task and hits else []
+        bullet_ids = [b["id"] for _, _, _, b in rows] if rows else []
+        duration_ms = (time.time() - t0) * 1000.0
+        ledger.record(LEDGER_PATH, event="context", project=project, query=task, hits=hit_paths, injected_bullets=bullet_ids, duration_ms=duration_ms)
+    except Exception:
+        pass
     return pack(sections, budget=int(budget), weights=DEFAULT_SECTION_WEIGHTS)
 
 
@@ -998,11 +1027,26 @@ def tool_eval(golden=str(Path(__file__).with_name("eval_golden.json")), k=5):
     return "\n".join([f"Recall@{k} {found}/{n} = {found / n:.2f}   MRR {rr / n:.3f}"] + misses)
 
 
+def tool_ledger(tail=None, project=None):
+    import ledger
+    cfg = load_config()
+    t = int(tail) if tail is not None else None
+    entries = ledger.read_ledger(cfg["ledger"], tail=t, project=project)
+    if not entries:
+        return f"ledger: no entries in {cfg['ledger']}"
+    lines = []
+    for e in entries:
+        lines.append(f"{e.get('ts')} [{e.get('agent')}] {e.get('event')} project={e.get('project')} "
+                     f"hits={len(e.get('hits', []))} bullets={len(e.get('injected_bullets', []))} "
+                     f"({e.get('duration_ms', 0):.1f}ms) - query={e.get('query')!r}")
+    return "\n".join(lines)
+
+
 def main(argv):
     cmd, *rest = argv or ["serve"]
     if cmd == "serve":
         return serve()
-    commands = {"search": tool_search, "graph": tool_graph, "context": tool_context, "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval}
+    commands = {"search": tool_search, "graph": tool_graph, "context": tool_context, "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval, "ledger": tool_ledger}
     if cmd not in commands:
         print(__doc__)
         return 2

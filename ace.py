@@ -76,7 +76,7 @@ class PlaybookLock:
     def acquire(self):
         start = time.time()
         nonce = uuid.uuid4().hex[:8]
-        payload = f"{os.getpid()}:{self.hostname}:{datetime.datetime.utcnow().isoformat()}:{nonce}\n"
+        payload = f"{os.getpid()}:{self.hostname}:{datetime.datetime.now(datetime.timezone.utc).isoformat()}:{nonce}\n"
         while True:
             try:
                 self.fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
@@ -315,15 +315,24 @@ def read_hook_input():
         return {}
 
 
-def hook_start():
+def hook_start(scope=None):
     data = read_hook_input()
-    scope = scope_for_cwd(data.get("cwd") or os.getcwd())
-    rows = select(["global"] + ([scope] if scope != "global" else []))
+    resolved_scope = scope or scope_for_cwd(data.get("cwd") or os.getcwd())
+    rows = select(["global"] + ([resolved_scope] if resolved_scope != "global" else []))
     if not rows:
         return
     text = ("Hive playbook (ACE). Apply what fits; note the ids you relied on. "
             "After substantial work run the `hive-ace` skill to tag them and add new lessons.\n" + format_bullets(rows))
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
+    try:
+        import ledger
+        cfg = hive.load_config()
+        ledger.record(cfg["ledger"], event="inject", project=resolved_scope, query="hook-start", injected_bullets=[b["id"] for _, _, b in rows])
+    except Exception:
+        pass
+    if data:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
+    else:
+        print(text)
 
 
 def count_tools(transcript_path):
@@ -346,12 +355,20 @@ def count_tools(transcript_path):
     return tools, edits
 
 
-def hook_stop():
+def hook_stop(scope=None, *args):
     data = read_hook_input()
+    resolved_scope = scope or scope_for_cwd(data.get("cwd") or os.getcwd())
+    try:
+        import ledger
+        cfg = hive.load_config()
+        ledger.record(cfg["ledger"], event="reflect", project=resolved_scope, query="hook-stop")
+    except Exception:
+        pass
     if data.get("stop_hook_active") or os.environ.get("HIVE_ACE_DISABLE"):
         return
     session, transcript = data.get("session_id"), data.get("transcript_path")
     if not session or not transcript:
+        print(f"ace: stop hook triggered for scope '{resolved_scope}'")
         return
     tools, edits = count_tools(transcript)
     try:
@@ -364,9 +381,8 @@ def hook_stop():
     state = dict(list(state.items())[-200:])
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
-    scope = scope_for_cwd(data.get("cwd") or os.getcwd())
     print(json.dumps({"decision": "block", "reason": (
-        f"Hive ACE checkpoint ({tools} tool calls). Run the `hive-ace` skill now for scope `{scope}`: "
+        f"Hive ACE checkpoint ({tools} tool calls). Run the `hive-ace` skill now for scope `{resolved_scope}`: "
         "reflect on this session, tag playbook bullets you used, add at most 3 new lessons, apply with ace.py, "
         "then finish your previous reply unchanged. Skip if nothing reusable was learned.")}))
 
@@ -377,7 +393,7 @@ def main(argv):
     cmd, *rest = argv or ["help"]
     if cmd in ("hook-start", "hook-stop"):
         try:  # a hook must never break the session
-            (hook_start if cmd == "hook-start" else hook_stop)()
+            (hook_start if cmd == "hook-start" else hook_stop)(*rest)
         except Exception as exc:
             print(f"hive ace {cmd}: {exc!r}", file=sys.stderr)
         return 0

@@ -1,4 +1,4 @@
-use ai_hive::ace::{apply, format_bullets, load, save, select_bullets, DeltaOps};
+use ai_hive::ace::{apply_with_lock, format_bullets, load, select_bullets, DeltaOps};
 use ai_hive::bench::run_bench;
 use ai_hive::common::{default_db_path, load_config};
 use ai_hive::eval::run_eval;
@@ -75,6 +75,13 @@ enum Commands {
     },
     /// Run index, search and graph benchmarks
     Bench,
+    /// Show recent session telemetry events from the local ledger
+    Ledger {
+        #[arg(long)]
+        tail: Option<usize>,
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// ACE playbook curator operations
     Ace {
         #[command(subcommand)]
@@ -95,9 +102,17 @@ enum AceCommands {
         task: Option<String>,
     },
     /// SessionStart hook
-    HookStart,
+    HookStart {
+        #[arg(default_value = "global")]
+        scope: String,
+    },
     /// Stop hook
-    HookStop,
+    HookStop {
+        #[arg(default_value = "global")]
+        scope: String,
+        #[arg(long)]
+        diff: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -115,7 +130,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Commands::Search { query, project, scope, limit } => {
                 let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 let proj = project.as_deref().unwrap_or("");
+                let t0 = std::time::Instant::now();
                 let hits = idx.search(&query, proj, limit, &scope)?;
+                let duration_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let hit_paths: Vec<String> = hits.iter().map(|h| h.path.clone()).collect();
+                ai_hive::ledger::record(&cfg.ledger, "query", proj, &query, &hit_paths, &[], duration_ms, None, None);
                 if hits.is_empty() {
                     println!("no matching notes");
                 } else {
@@ -166,6 +185,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let res = run_bench(&mut idx)?;
                 println!("{}", res);
             }
+            Commands::Ledger { tail, project } => {
+                let entries = ai_hive::ledger::read_ledger(&cfg.ledger, tail, project.as_deref());
+                if entries.is_empty() {
+                    println!("ledger: no entries in {}", cfg.ledger.display());
+                } else {
+                    for e in entries {
+                        println!(
+                            "{} [{}] {} project={} hits={} bullets={} ({:.1}ms) - query={:?}",
+                            e.ts, e.agent, e.event, e.project, e.hits.len(), e.injected_bullets.len(), e.duration_ms, e.query
+                        );
+                    }
+                }
+            }
             Commands::Ace { cmd } => {
                 let vault = cfg.vault;
                 match cmd {
@@ -178,9 +210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             buf
                         };
                         let ops: DeltaOps = serde_json::from_str(&json_str)?;
-                        let mut sections = load(&vault, &scope)?;
-                        let changed = apply(&mut sections, &ops)?;
-                        save(&vault, &scope, &sections, None)?;
+                        let changed = apply_with_lock(&vault, &scope, &ops)?;
                         println!("ace: applied {} changes to {}", changed, scope);
                     }
                     AceCommands::Show { scope, task } => {
@@ -189,15 +219,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let bullets = select_bullets(&sections, t, 12);
                         println!("{}", format_bullets(&bullets));
                     }
-                    AceCommands::HookStart => {
-                        let sections = load(&vault, "global")?;
+                    AceCommands::HookStart { scope } => {
+                        let sections = load(&vault, &scope)?;
                         let bullets = select_bullets(&sections, "", 8);
+                        let bullet_ids: Vec<String> = bullets.iter().map(|b| b.id.clone()).collect();
+                        ai_hive::ledger::record(&cfg.ledger, "inject", &scope, "hook-start", &[], &bullet_ids, 0.0, None, None);
                         if !bullets.is_empty() {
-                            println!("[ACE Playbook]\n{}", format_bullets(&bullets));
+                            println!("[ACE Playbook ({})]\n{}", scope, format_bullets(&bullets));
                         }
                     }
-                    AceCommands::HookStop => {
-                        println!("ace: stop hook triggered");
+                    AceCommands::HookStop { scope, diff } => {
+                        ai_hive::ledger::record(&cfg.ledger, "reflect", &scope, "hook-stop", &[], &[], 0.0, None, None);
+                        println!("ace: stop hook triggered for scope '{}' (diff={})", scope, diff);
                     }
                 }
             }

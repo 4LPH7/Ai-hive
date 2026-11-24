@@ -7,7 +7,7 @@ Comprehensive engineering roadmap transitioning `ai-hive` from Python prototype 
 
 - [x] **Phase 1: Correctness, Security & Regression Lock (v1.1)** - Fixed path traversal, quota packing, isolation, directed graphs, secrets, BOM.
 - [x] **Phase 2: Portability, Packaging, Rust Core & CI Harness (v1.2)** - Rust standalone binary, unified config, SHA-256 refresh, and public CI matrix.
-- [ ] **Phase 3: Learning Foundation & Cross-Agent Parity (v1.5)** - ACE counter split, atomic locks, JSONL session ledger, and reflection parity.
+- [x] **Phase 3: Learning Foundation & Cross-Agent Parity (v1.5)** - ACE counter split, atomic locks, JSONL session ledger, and reflection parity.
 - [ ] **Phase 4: Evidence-Gated Intelligence & Scale (v2.0)** - Objective outcome rewards, auto-decay, and inbox LLM curator.
 - [ ] **Phase 5: Auto-Skill Discovery, Selection & Dynamic Installation Engine (v2.1)** - Intelligent local skill ranking, remote registry search (find-skills), and dynamic installation for agents.
 
@@ -40,7 +40,7 @@ Plans:
 ### Phase 3: Learning Foundation & Cross-Agent Parity (v1.5)
 **Goal**: Honest, atomic ACE self-improvement loop shared across all coding agents.
 **Requirements**: [ACE-01, LOCK-01, LEDG-01, HOOK-01]
-**Status**: Ready
+**Status**: Completed ✓
 **Success Criteria**:
 1. Separate `seen` count from `helpful`/`harmful` feedback.
 2. Concurrent ACE updates keep 50/50 bullets via atomic lockfile.
@@ -48,9 +48,9 @@ Plans:
 4. Codex and Antigravity reflection parity feeds the shared ledger.
 
 Plans:
-- [ ] 03-01: Atomic Lockfile & Counter Split Parity in Rust Core
-- [ ] 03-02: Cross-Agent Session Ledger (`ledger.jsonl`)
-- [ ] 03-03: Cross-Agent Session Hooks & Reflection Parity
+- [x] 03-01: Atomic Lockfile & Counter Split Parity in Rust Core
+- [x] 03-02: Cross-Agent Session Ledger (`ledger.jsonl`)
+- [x] 03-03: Cross-Agent Session Hooks & Reflection Parity
 
 ### Phase 4: Evidence-Gated Intelligence & Scale (v2.0)
 **Goal**: Self-optimization unlocked strictly when usage data justifies cost.

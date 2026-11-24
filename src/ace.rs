@@ -2,7 +2,8 @@ use crate::common::validate_slug;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const SECTIONS: &[(&str, &str)] = &[
@@ -18,6 +19,145 @@ pub const MAX_BULLETS: usize = 80;
 pub const DUP_JACCARD: f64 = 0.75;
 pub const PRUNE_MARGIN: i64 = 3;
 pub const INJECT_LIMIT: usize = 12;
+
+pub fn get_hostname() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "localhost".to_string())
+}
+
+#[cfg(windows)]
+pub fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> *mut std::ffi::c_void;
+        fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+    }
+    unsafe {
+        let handle = OpenProcess(0x1000 | 0x00100000, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        CloseHandle(handle);
+        true
+    }
+}
+
+#[cfg(unix)]
+pub fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    unsafe { kill(pid as i32, 0) == 0 }
+}
+
+#[derive(Debug)]
+pub struct PlaybookLock {
+    pub lock_path: PathBuf,
+    pub acquired: bool,
+}
+
+impl PlaybookLock {
+    pub fn acquire(path: &Path, timeout: std::time::Duration) -> Result<Self, String> {
+        let lock_path = path.with_extension("lock");
+        let start = std::time::Instant::now();
+        let pid = std::process::id();
+        let hostname = get_hostname();
+        let nonce = format!(
+            "{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+                % 0xffff_ffff
+        );
+        let now_iso = chrono::Utc::now().to_rfc3339();
+        let payload = format!("{}:{}:{}:{}\n", pid, hostname, now_iso, nonce);
+
+        loop {
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+            {
+                Ok(mut file) => {
+                    let _ = file.write_all(payload.as_bytes());
+                    return Ok(Self {
+                        lock_path,
+                        acquired: true,
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Lock exists, will check age / staleness
+                }
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
+            }
+
+            let elapsed = start.elapsed();
+            if elapsed > timeout {
+                if let Ok(content) = fs::read_to_string(&lock_path) {
+                    let parts: Vec<&str> = content.trim().split(':').collect();
+                    let lock_host = parts.get(1).copied().unwrap_or("");
+                    if !lock_host.is_empty() && lock_host != hostname {
+                        return Err(format!(
+                            "playbook locked by foreign host {}",
+                            lock_host
+                        ));
+                    }
+                }
+                return Err(format!(
+                    "could not acquire playbook lock after {:?}: held by {}",
+                    timeout,
+                    lock_path.display()
+                ));
+            }
+
+            if elapsed > std::time::Duration::from_millis(500) {
+                if let Ok(content) = fs::read_to_string(&lock_path) {
+                    let parts: Vec<&str> = content.trim().split(':').collect();
+                    let lock_pid = parts.get(0).and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+                    let lock_host = parts.get(1).copied().unwrap_or("");
+                    let is_stale = lock_host == hostname && lock_pid > 0 && !is_pid_alive(lock_pid);
+
+                    let age = match lock_path.metadata().and_then(|m| m.modified()) {
+                        Ok(m) => std::time::SystemTime::now().duration_since(m).unwrap_or(std::time::Duration::ZERO),
+                        Err(_) => std::time::Duration::ZERO,
+                    };
+
+                    if is_stale || age > timeout {
+                        if lock_host != hostname && !is_stale {
+                            return Err(format!(
+                                "playbook locked by foreign host {} (age {:.1?})",
+                                lock_host, age
+                            ));
+                        }
+                        let _ = fs::remove_file(&lock_path);
+                        continue;
+                    }
+                }
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for PlaybookLock {
+    fn drop(&mut self) {
+        if self.acquired {
+            let _ = fs::remove_file(&self.lock_path);
+        }
+    }
+}
 
 pub fn is_secret(text: &str) -> bool {
     let re = Regex::new(
@@ -297,6 +437,22 @@ pub fn apply(
         }
     }
 
+    Ok(changed)
+}
+
+pub fn apply_with_lock(
+    vault: &Path,
+    scope: &str,
+    ops: &DeltaOps,
+) -> Result<usize, String> {
+    let path = scope_path(vault, scope)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let _lock = PlaybookLock::acquire(&path, std::time::Duration::from_secs(30))?;
+    let mut sections = load(vault, scope)?;
+    let changed = apply(&mut sections, ops)?;
+    save(vault, scope, &sections, None)?;
     Ok(changed)
 }
 
