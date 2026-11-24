@@ -29,21 +29,52 @@ STATUS_PRIOR = {"superseded": 0.3, "archived": 0.4}
 SCHEMA_VERSION = 2
 PROJECT_BOOST = 2.0  # eval 2026-11-16: 1.5 -> 28/30, 2.0 -> 29/30 (higher gives no further gain)
 AUTOCUT_RATIO = 0.30  # keep hits >= 30% of the best; eval 2026-11-23: 0.35 cut a rank-4 answer (29/30), 0.30 -> 30/30, +0.3 hits
-TOKEN_CHARS = 4  # ponytail: chars/4 token estimate; swap for a tokenizer if budgets drift
+PROJECT_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+PPR_FORWARD_WEIGHT = 1.0
+PPR_REVERSE_WEIGHT = 0.25
+PACK_SHARES = {"memory": 0.35, "playbook": 0.15, "notes": 0.25, "graph": 0.25}
 
 
 def est_tokens(text):
-    return len(text) // TOKEN_CHARS + 1
+    if not text:
+        return 0
+    lines = text.splitlines() or [text]
+    code_lines = sum(bool(re.search(r"[{}();=<>]|\b(def|class|return|import|const|function)\b", line))
+                     for line in lines)
+    chars_per_token = 3.0 if code_lines / max(1, len(lines)) >= 0.25 else 3.7
+    lexical = len(re.findall(r"\w+|[^\w\s]", text))
+    return max(1, math.ceil(max(len(text) / chars_per_token, lexical * 0.72) * 1.10))
 
 
 def slugify(name):
-    return name.strip().lower().replace(" ", "-")
+    return str(name).strip().lower().replace(" ", "-")
+
+
+def validate_project_slug(name):
+    if not isinstance(name, str):
+        raise ValueError("project must be a string slug")
+    slug = slugify(name)
+    if not PROJECT_SLUG_RE.fullmatch(slug):
+        raise ValueError(f"invalid project slug {name!r}; use letters, digits, '_' or '-'")
+    return slug
+
+
+def safe_vault_path(vault, rel):
+    root = Path(vault).resolve()
+    candidate = Path(rel)
+    if candidate.is_absolute():
+        raise ValueError("vault paths must be relative")
+    target = (root / candidate).resolve()
+    if not target.is_relative_to(root):
+        raise ValueError(f"path escapes the vault: {rel!r}")
+    return target
 
 
 # ---------------------------------------------------------------- vault index
 
 def parse_note(text):
     """Return (frontmatter dict, title, body). Flat `key: value` frontmatter only."""
+    text = text.removeprefix("\ufeff")  # Windows editors may save UTF-8 with a BOM.
     meta, body = {}, text
     if text.startswith("---"):
         end = text.find("\n---", 3)
@@ -122,19 +153,33 @@ class Index:
                 changed += 1
         return changed
 
-    def search(self, query, project="", limit=8):
-        """BM25 (title x5) re-ranked by note type, status and project match."""
+    def search(self, query, project="", limit=8, scope="all"):
+        """BM25 search with explicit project/global scope and metadata boosts."""
         self.refresh()
+        if scope not in {"project", "global", "all"}:
+            raise ValueError("scope must be 'project', 'global' or 'all'")
+        if project:
+            project = validate_project_slug(project)
         terms = re.findall(r"\w+", query.lower())
         if not terms:
             return []
         match = " OR ".join(f'"{t}"' for t in terms)
-        rows = self.db.execute("""
+        scope_sql, params = "", [match]
+        if scope == "global":
+            scope_sql = " AND n.project IN ('', 'all')"
+        elif scope == "project":
+            if project:
+                scope_sql = " AND n.project IN (?, '', 'all')"
+                params.append(project)
+            else:
+                scope_sql = " AND n.project IN ('', 'all')"
+        params.append(limit * 4)
+        rows = self.db.execute(f"""
             SELECT f.path, n.title, n.project, n.type, n.status, n.updated,
                    -bm25(notes_fts, 0.0, 5.0, 2.0, 1.0) AS s,
                    snippet(notes_fts, 3, '[', ']', '...', 18)
             FROM notes_fts f JOIN notes n ON n.path = f.path
-            WHERE notes_fts MATCH ? ORDER BY s DESC LIMIT ?""", (match, limit * 4)).fetchall()
+            WHERE notes_fts MATCH ?{scope_sql} ORDER BY s DESC LIMIT ?""", params).fetchall()
         hits = []
         for path, title, proj, ntype, status, updated, score, snip in rows:
             score *= TYPE_PRIOR.get(ntype, 1.0) * STATUS_PRIOR.get(status, 1.0)
@@ -149,8 +194,8 @@ class Index:
         return hits[:limit]
 
     def note(self, rel):
-        path = self.vault / rel
-        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        path = safe_vault_path(self.vault, rel)
+        return path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else ""
 
     def by_project(self, project, ntype):
         self.refresh()
@@ -184,15 +229,33 @@ def split_ident(text):
 
 
 def repo_dir(repo):
-    """Accept a repo folder path, a folder name under PROJECTS, or a vault slug."""
-    path = Path(repo)
-    if path.is_dir() and (path / "graphify-out").is_dir():
-        return path
-    want = slugify(path.name or str(repo))
-    if PROJECTS.is_dir():
-        for d in PROJECTS.iterdir():
-            if d.is_dir() and slugify(d.name) == want:
-                return d
+    """Resolve only a direct child repository of PROJECTS; never trust an arbitrary path."""
+    if not isinstance(repo, str) or not repo.strip():
+        return None
+    root = PROJECTS.resolve()
+    candidate = Path(repo).expanduser()
+    if candidate.is_absolute() or len(candidate.parts) > 1:
+        try:
+            resolved = candidate.resolve()
+            relative = resolved.relative_to(root)
+        except (OSError, ValueError):
+            return None
+        if len(relative.parts) != 1:
+            return None
+        return resolved if (resolved / "graphify-out").is_dir() else None
+    try:
+        want = validate_project_slug(candidate.name)
+    except ValueError:
+        return None
+    if root.is_dir():
+        for entry in root.iterdir():
+            try:
+                resolved = entry.resolve()
+                if entry.is_dir() and resolved.parent == root and slugify(entry.name) == want:
+                    if (resolved / "graphify-out").is_dir():
+                        return resolved
+            except OSError:
+                continue
     return None
 
 
@@ -218,15 +281,16 @@ class Graph:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         self.commit = data.get("built_at_commit") or ""
         self.nodes = {n["id"]: n for n in data.get("nodes", []) if "id" in n}
-        self.adj = defaultdict(dict)  # node -> {neighbour: (weight, relation)}, undirected
+        # Preserve graphify's source -> target semantics (e.g. caller -> callee).
+        self.out_adj, self.in_adj = defaultdict(dict), defaultdict(dict)
         for e in data.get("links") or data.get("edges") or []:
-            s, t, rel = e.get("source"), e.get("target"), e.get("relation", "")
-            if s == t or s not in self.nodes or t not in self.nodes:
+            source, target, rel = e.get("source"), e.get("target"), e.get("relation", "")
+            if source == target or source not in self.nodes or target not in self.nodes:
                 continue
-            w = float(e.get("confidence_score") or 0.5) * REL_WEIGHT.get(rel, 0.6)
-            for a, b in ((s, t), (t, s)):
-                if w > self.adj[a].get(b, (0.0, ""))[0]:
-                    self.adj[a][b] = (w, rel)
+            weight = float(e.get("confidence_score") or 0.5) * REL_WEIGHT.get(rel, 0.6)
+            if weight > self.out_adj[source].get(target, (0.0, ""))[0]:
+                self.out_adj[source][target] = (weight, rel)
+                self.in_adj[target][source] = (weight, rel)
         self.tokens = defaultdict(set)
         for nid, n in self.nodes.items():
             words = split_ident(n.get("label", "")) + split_ident(Path(n.get("source_file") or "").stem)
@@ -249,31 +313,37 @@ class Graph:
         return sorted(score, key=score.get, reverse=True)[:k]
 
     def rank(self, seeds, hops=PPR_HOPS, iters=PPR_ITERS):
-        """Personalized PageRank on the k-hop neighbourhood of the seeds, with hub dampening
-        (flow into a node is divided by sqrt(degree)) so god nodes do not swamp the result."""
+        """Directed PageRank; forward relationships dominate reverse contextual traversal."""
         local, frontier = set(seeds), set(seeds)
         for _ in range(hops):
-            frontier = {b for a in frontier for b in self.adj[a]} - local
+            frontier = {b for a in frontier for b in (*self.out_adj[a], *self.in_adj[a])} - local
             local |= frontier
-        # ponytail: pure-Python power iteration on the local subgraph; move to numpy/rustworkx past ~1M edges
-        out = {}
-        for a in local:
-            nbrs = [(b, w / math.sqrt(len(self.adj[b]))) for b, (w, _) in self.adj[a].items() if b in local]
-            total = sum(w for _, w in nbrs)
-            out[a] = [(b, w / total) for b, w in nbrs] if total else []
-        restart = {s: 1 / len(seeds) for s in seeds}
+        transitions = {}
+        for node in local:
+            neighbours = []
+            for target, (weight, _) in self.out_adj[node].items():
+                if target in local:
+                    degree = max(1, len(self.out_adj[target]) + len(self.in_adj[target]))
+                    neighbours.append((target, PPR_FORWARD_WEIGHT * weight / math.sqrt(degree)))
+            for source, (weight, _) in self.in_adj[node].items():
+                if source in local:
+                    degree = max(1, len(self.out_adj[source]) + len(self.in_adj[source]))
+                    neighbours.append((source, PPR_REVERSE_WEIGHT * weight / math.sqrt(degree)))
+            total = sum(weight for _, weight in neighbours)
+            transitions[node] = [(target, weight / total) for target, weight in neighbours] if total else []
+        restart = {seed: 1 / len(seeds) for seed in seeds}
         rank = dict(restart)
         for _ in range(iters):
             nxt = defaultdict(float)
             dangling = 0.0
-            for a, p in rank.items():
-                if out[a]:
-                    for b, w in out[a]:
-                        nxt[b] += (1 - PPR_RESTART) * p * w
+            for node, probability in rank.items():
+                if transitions[node]:
+                    for target, weight in transitions[node]:
+                        nxt[target] += (1 - PPR_RESTART) * probability * weight
                 else:
-                    dangling += p
-            for s, p in restart.items():
-                nxt[s] += (PPR_RESTART + (1 - PPR_RESTART) * dangling) * p
+                    dangling += probability
+            for seed, probability in restart.items():
+                nxt[seed] += (PPR_RESTART + (1 - PPR_RESTART) * dangling) * probability
             rank = nxt
         return rank
 
@@ -286,7 +356,8 @@ class Graph:
         top = (sorted(seeds, key=rank.get, reverse=True)
                + sorted(set(rank) - set(seeds), key=rank.get, reverse=True))[:limit]
         keep = set(top)
-        edges = [(a, rel, b) for a in top for b, (_, rel) in self.adj[a].items() if b in keep and a < b]
+        edges = [(source, rel, target) for source in top
+                 for target, (_, rel) in self.out_adj[source].items() if target in keep]
         return [(nid, rank[nid], nid in seeds) for nid in top], edges
 
 
@@ -389,7 +460,7 @@ def tool_graph(repo, query, limit=15):
     lines += [fmt_node(g.nodes[nid], seed) for nid, _, seed in ranked]
     if edges:
         lines += ["", "edges among these:"]
-        lines += [f"  {g.nodes[a].get('label')} -{rel}- {g.nodes[b].get('label')}" for a, rel, b in edges[:25]]
+        lines += [f"  {g.nodes[a].get('label')} -{rel}-> {g.nodes[b].get('label')}" for a, rel, b in edges[:25]]
     stems = {Path(g.nodes[nid].get("source_file") or "").stem for nid, _, _ in ranked[:6]} - {""}
     slug = slugify(d.name)
     notes = [h for h in index().search(" ".join(stems), slug, 8) if h["project"] == slug][:4] if stems else []
