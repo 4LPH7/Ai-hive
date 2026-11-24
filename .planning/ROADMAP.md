@@ -9,6 +9,7 @@ Comprehensive engineering roadmap transitioning `ai-hive` from Python prototype 
 - [ ] **Phase 2: Portability, Packaging, Rust Core & CI Harness (v1.2)** - Rust standalone binary, unified config, SHA-256 refresh, and public CI matrix.
 - [ ] **Phase 3: Learning Foundation & Cross-Agent Parity (v1.5)** - ACE counter split, atomic locks, JSONL session ledger, and reflection parity.
 - [ ] **Phase 4: Evidence-Gated Intelligence & Scale (v2.0)** - Objective outcome rewards, auto-decay, and inbox LLM curator.
+- [ ] **Phase 5: Auto-Skill Discovery, Selection & Dynamic Installation Engine (v2.1)** - Intelligent local skill ranking, remote registry search (find-skills), and dynamic installation for agents.
 
 ## Phase Details
 
@@ -49,3 +50,15 @@ Plans:
 **Success Criteria**:
 1. Objective outcome rewards score bullets based on test exit codes and git diffs.
 2. Optional cheap LLM curator merges duplicate playbook rules.
+
+### Phase 5: Auto-Skill Discovery, Selection & Dynamic Installation Engine (v2.1)
+**Goal**: Automatically select the best installed skill for any agent task, and dynamically discover, install, and inject missing skills from registries like `find-skills` (`npx skills`).
+**Requirements**: [SKILL-INDEX, SKILL-MATCH, SKILL-RESOLVE, SKILL-FIND, SKILL-INSTALL, SKILL-LOAD, HIVE-TOOL, ACE-LINK]
+**Success Criteria**:
+1. Skill Indexer discovers and indexes skills across Antigravity, Codex, Claude Code, and project `.agent/skills`.
+2. Skill Matcher ranks local skills against agent task intent with confidence thresholding.
+3. If no matching local skill meets threshold, remote search queries registries (`npx skills find` / marketplace).
+4. Auto-installer safely installs chosen skill into local/project repository and verifies integrity.
+5. Injects freshly loaded `SKILL.md` instructions and tool schemas directly into agent context.
+6. `hive_skill` MCP tool and CLI command operational in both Python and Rust cores.
+7. End-to-end integration test passes: task -> local miss -> remote find -> install -> inject.

@@ -18,6 +18,15 @@
 - [ ] **LEDG-01**: Local JSONL session ledger outside vault tracking injected bullets and zero-hit queries
 - [ ] **HOOK-01**: Strictly fail-open Codex Stop-hook and Antigravity reflection sync
 
+### Auto-Skill Discovery & Dynamic Installation (Phase 5)
+- [ ] **SKILL-01**: Cross-agent local skill indexer (Antigravity, Codex, Claude Code, project `.agent/skills`)
+- [ ] **SKILL-02**: Semantic/BM25 skill intent matcher with confidence thresholding
+- [ ] **SKILL-03**: Remote skill search integration via `npx skills find` / registry API
+- [ ] **SKILL-04**: Automated safe skill installation (`npx skills add` / download)
+- [ ] **SKILL-05**: Dynamic `SKILL.md` parser and execution context injector
+- [ ] **SKILL-06**: `hive_skill` MCP tool in Python and Rust + `hive skill` CLI command
+- [ ] **SKILL-07**: ACE playbook reinforcement loop for tracking skill performance on tasks
+
 ## Traceability
 
 | Requirement | Phase | Status |
@@ -31,3 +40,10 @@
 | LOCK-01 | Phase 3 | Pending |
 | LEDG-01 | Phase 3 | Pending |
 | HOOK-01 | Phase 3 | Pending |
+| SKILL-01 | Phase 5 | Pending |
+| SKILL-02 | Phase 5 | Pending |
+| SKILL-03 | Phase 5 | Pending |
+| SKILL-04 | Phase 5 | Pending |
+| SKILL-05 | Phase 5 | Pending |
+| SKILL-06 | Phase 5 | Pending |
+| SKILL-07 | Phase 5 | Pending |
