@@ -191,7 +191,7 @@ def check_orphans(notes, inbound, selected=None):
     selected = set(notes) if selected is None else set(selected)
     return [Finding("INFO", "orphan", rel, "no note links here; link it from the project's _memory.md")
             for rel in notes if rel in selected
-            and rel.startswith("projects/") and Path(rel).stem not in CONVENTIONAL_NAMES and not inbound[rel] - {rel}
+            and rel.startswith("projects/") and Path(rel).stem not in CONVENTIONAL_NAMES and not inbound[rel] - {rel}]
 
 
 def staged_paths(vault):
