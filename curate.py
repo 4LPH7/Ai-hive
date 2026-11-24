@@ -70,8 +70,8 @@ def curate_schema():
     }
 
 
-def run_curate(ledger_path=None, vault_path=None, project=None, dry_run=False):
-    llm_cfg = llm.load_llm_config()
+def run_curate(ledger_path=None, vault_path=None, project=None, dry_run=False, config_path=None):
+    llm_cfg = llm.load_llm_config(cli_config=config_path)
     if not llm_cfg.get("enabled", True):
         return {
             "model": "disabled",
@@ -85,7 +85,7 @@ def run_curate(ledger_path=None, vault_path=None, project=None, dry_run=False):
             "reason": "LLM disabled in configuration",
         }
 
-    cfg = hive.load_config()
+    cfg = hive.load_config(cli_config=config_path)
     ledger_p = Path(ledger_path or cfg.get("ledger", Path(os.environ.get("HIVE_LEDGER", "ledger.jsonl"))))
     vault_p = Path(vault_path or cfg.get("vault", Path(os.environ.get("HIVE_VAULT", Path.home() / "vault"))))
 

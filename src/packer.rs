@@ -41,7 +41,12 @@ pub fn pack(sections: &[Section], budget: usize) -> String {
 
     let mut alloc: HashMap<&str, usize> = active
         .iter()
-        .map(|s| (s.name, ((budget as f64) * (s.weight / safe_w_sum)).floor() as usize))
+        .map(|s| {
+            (
+                s.name,
+                ((budget as f64) * (s.weight / safe_w_sum)).floor() as usize,
+            )
+        })
         .collect();
 
     // Dynamic redistribution of surplus
@@ -49,7 +54,7 @@ pub fn pack(sections: &[Section], budget: usize) -> String {
         .iter()
         .map(|(&name, &al)| {
             let cost = costs[name];
-            if al > cost { al - cost } else { 0 }
+            al.saturating_sub(cost)
         })
         .sum();
 
@@ -75,7 +80,9 @@ pub fn pack(sections: &[Section], budget: usize) -> String {
 
         let mut distributed = 0;
         for s in &unsatisfied {
-            let share = (surplus as f64 * (s.weight / safe_u_w_sum)).max(1.0).floor() as usize;
+            let share = (surplus as f64 * (s.weight / safe_u_w_sum))
+                .max(1.0)
+                .floor() as usize;
             let needed = costs[s.name] - alloc[s.name];
             let rem = surplus - distributed;
             let add = needed.min(rem.min(share));
@@ -106,7 +113,11 @@ pub fn pack(sections: &[Section], budget: usize) -> String {
         } else {
             let suffix = "\n...[truncated to budget]";
             let suffix_tokens = est_tokens(suffix);
-            let avail_tokens = if al > suffix_tokens { al - suffix_tokens } else { 1 };
+            let avail_tokens = if al > suffix_tokens {
+                al - suffix_tokens
+            } else {
+                1
+            };
             let lines: Vec<&str> = s.text.trim().lines().collect();
             let mut low = 0usize;
             let mut high = lines.len();
@@ -159,8 +170,16 @@ mod tests {
 
     #[test]
     fn test_pack_quota_distribution() {
-        let sec1 = Section { name: "memory", text: "Short memory", weight: 0.35 };
-        let sec2 = Section { name: "playbook", text: "Short playbook", weight: 0.15 };
+        let sec1 = Section {
+            name: "memory",
+            text: "Short memory",
+            weight: 0.35,
+        };
+        let sec2 = Section {
+            name: "playbook",
+            text: "Short playbook",
+            weight: 0.15,
+        };
         let res = pack(&[sec1, sec2], 1500);
         assert!(res.contains("Short memory"));
         assert!(res.contains("Short playbook"));
@@ -168,9 +187,20 @@ mod tests {
 
     #[test]
     fn test_pack_truncation_and_omitted() {
-        let long_text = (0..500).map(|i| format!("Line {i} with substantial detailed technical text")).collect::<Vec<_>>().join("\n");
-        let sec1 = Section { name: "memory", text: &long_text, weight: 0.35 };
-        let sec2 = Section { name: "playbook", text: "Playbook rule", weight: 0.15 };
+        let long_text = (0..500)
+            .map(|i| format!("Line {i} with substantial detailed technical text"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sec1 = Section {
+            name: "memory",
+            text: &long_text,
+            weight: 0.35,
+        };
+        let sec2 = Section {
+            name: "playbook",
+            text: "Playbook rule",
+            weight: 0.15,
+        };
         let res = pack(&[sec1, sec2], 100);
         assert!(res.contains("...[truncated to budget]"));
     }

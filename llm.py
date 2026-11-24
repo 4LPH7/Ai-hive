@@ -10,8 +10,8 @@ import ace
 import hive
 
 
-def load_llm_config():
-    cfg_raw = hive.load_config()
+def load_llm_config(cli_config=None):
+    cfg_raw = hive.load_config(cli_config=cli_config)
     enabled_val = os.environ.get("HIVE_LLM_ENABLED", cfg_raw.get("llm.enabled", "true"))
     enabled = str(enabled_val).lower() not in ("0", "false", "no")
 

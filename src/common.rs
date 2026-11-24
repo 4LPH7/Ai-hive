@@ -1,9 +1,9 @@
+use chrono::NaiveDate;
+use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use regex::Regex;
-use chrono::NaiveDate;
-use sha2::{Digest, Sha256};
 
 pub fn sha256(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -69,7 +69,8 @@ pub fn est_tokens(text: &str) -> usize {
         if in_fence
             || line.starts_with("    ")
             || line.starts_with('\t')
-            || (!stripped.is_empty() && (stripped.ends_with('{') || stripped.ends_with('}') || stripped.ends_with(';')))
+            || (!stripped.is_empty()
+                && (stripped.ends_with('{') || stripped.ends_with('}') || stripped.ends_with(';')))
         {
             code_chars += line.len() + 1;
         } else {
@@ -131,6 +132,41 @@ pub struct HiveConfig {
     pub ledger: PathBuf,
 }
 
+pub fn strip_inline_comment(s: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for (i, c) in s.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' && in_double {
+            escaped = true;
+            continue;
+        }
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+        } else if c == '"' && !in_single {
+            in_double = !in_double;
+        } else if c == '#' && !in_single && !in_double {
+            return &s[..i];
+        }
+    }
+    s
+}
+
+pub fn unquote(s: &str) -> String {
+    let trimmed = s.trim();
+    if (trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2)
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2)
+    {
+        trimmed[1..trimmed.len() - 1].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 pub fn parse_toml_config(content: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let mut current_section = String::new();
@@ -139,8 +175,12 @@ pub fn parse_toml_config(content: &str) -> HashMap<String, String> {
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            let sec = trimmed[1..trimmed.len() - 1].trim().to_lowercase();
+        let stripped = strip_inline_comment(trimmed).trim();
+        if stripped.is_empty() {
+            continue;
+        }
+        if stripped.starts_with('[') && stripped.ends_with(']') {
+            let sec = stripped[1..stripped.len() - 1].trim().to_lowercase();
             current_section = if sec.is_empty() || sec == "hive" {
                 String::new()
             } else {
@@ -148,9 +188,9 @@ pub fn parse_toml_config(content: &str) -> HashMap<String, String> {
             };
             continue;
         }
-        if let Some((k, v)) = trimmed.split_once('=') {
+        if let Some((k, v)) = stripped.split_once('=') {
             let raw_k = k.trim().to_lowercase();
-            let val = v.trim().trim_matches('"').trim_matches('\'').trim().to_string();
+            let val = unquote(v);
             if current_section.is_empty() {
                 map.insert(raw_k, val);
             } else {
@@ -176,9 +216,14 @@ pub fn find_default_config_path() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok();
     if let Some(h) = home {
-        let p = PathBuf::from(h).join(".config").join("hive").join("config.toml");
+        let p = PathBuf::from(h)
+            .join(".config")
+            .join("hive")
+            .join("config.toml");
         if p.is_file() {
             return Some(p);
         }
@@ -196,7 +241,11 @@ pub fn load_config(
         match fs::read_to_string(explicit) {
             Ok(c) => parse_toml_config(&c),
             Err(e) => {
-                eprintln!("hive: error reading specified config {}: {}", explicit.display(), e);
+                eprintln!(
+                    "hive: error reading specified config {}: {}",
+                    explicit.display(),
+                    e
+                );
                 HashMap::new()
             }
         }
@@ -276,7 +325,12 @@ pub fn load_config(
             }
         });
 
-    HiveConfig { vault, projects, db, ledger }
+    HiveConfig {
+        vault,
+        projects,
+        db,
+        ledger,
+    }
 }
 
 pub fn default_vault() -> PathBuf {
@@ -312,14 +366,23 @@ mod tests {
         let content = r#"
         # Sample configuration
         [hive]
-        vault = "/custom/vault"
+        vault = "/custom/vault" # Trailing inline comment
         projects = "/custom/projects"
         db = "/custom/db.sqlite"
+
+        [llm]
+        default_privacy = "private" # "private" forces hive-private unless overridden
+        url = "http://127.0.0.1:20128/v1#anchor" # inline comment with hash in url
         "#;
         let map = parse_toml_config(content);
         assert_eq!(map.get("vault").unwrap(), "/custom/vault");
         assert_eq!(map.get("projects").unwrap(), "/custom/projects");
         assert_eq!(map.get("db").unwrap(), "/custom/db.sqlite");
+        assert_eq!(map.get("llm.default_privacy").unwrap(), "private");
+        assert_eq!(
+            map.get("llm.url").unwrap(),
+            "http://127.0.0.1:20128/v1#anchor"
+        );
     }
 
     #[test]
@@ -369,10 +432,22 @@ mod tests {
 
     #[test]
     fn test_active_work_cell_matches() {
-        assert!(active_work_cell_matches("[[projects/ai-hive/_memory|ai-hive]]", "ai-hive"));
-        assert!(active_work_cell_matches("[[projects/ai-hive/_memory]]", "ai-hive"));
+        assert!(active_work_cell_matches(
+            "[[projects/ai-hive/_memory|ai-hive]]",
+            "ai-hive"
+        ));
+        assert!(active_work_cell_matches(
+            "[[projects/ai-hive/_memory]]",
+            "ai-hive"
+        ));
         assert!(active_work_cell_matches("projects/ai-hive", "ai-hive"));
-        assert!(!active_work_cell_matches("[[projects/fpolink-api/_memory|api]]", "fpolink"));
-        assert!(active_work_cell_matches("[[projects/fpolink-api/_memory|api]]", "api"));
+        assert!(!active_work_cell_matches(
+            "[[projects/fpolink-api/_memory|api]]",
+            "fpolink"
+        ));
+        assert!(active_work_cell_matches(
+            "[[projects/fpolink-api/_memory|api]]",
+            "api"
+        ));
     }
 }

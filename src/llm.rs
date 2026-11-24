@@ -92,7 +92,10 @@ pub fn load_llm_config(config_path: Option<&Path>) -> LlmConfig {
         if let Ok(ms) = v.parse::<u64>() {
             cfg.timeout_ms = ms;
         }
-    } else if let Some(v) = toml_map.get("llm.timeout_ms").and_then(|s| s.parse::<u64>().ok()) {
+    } else if let Some(v) = toml_map
+        .get("llm.timeout_ms")
+        .and_then(|s| s.parse::<u64>().ok())
+    {
         cfg.timeout_ms = v;
     }
 
@@ -116,7 +119,8 @@ pub fn load_llm_config(config_path: Option<&Path>) -> LlmConfig {
         if let Some(rest) = k.strip_prefix("projects.") {
             if let Some((slug, field)) = rest.split_once('.') {
                 if field == "llm_privacy" {
-                    cfg.project_privacies.insert(slug.to_string(), v.to_lowercase());
+                    cfg.project_privacies
+                        .insert(slug.to_string(), v.to_lowercase());
                 }
             }
         }
@@ -126,7 +130,9 @@ pub fn load_llm_config(config_path: Option<&Path>) -> LlmConfig {
 }
 
 pub fn resolve_combo(cfg: &LlmConfig, tier: &str, project: Option<&str>) -> String {
-    let proj_privacy = project.and_then(|p| cfg.project_privacies.get(p)).map(|s| s.as_str());
+    let proj_privacy = project
+        .and_then(|p| cfg.project_privacies.get(p))
+        .map(|s| s.as_str());
     let is_private = match proj_privacy {
         Some("private") => true,
         Some("public") | Some("shared") => false,
@@ -205,7 +211,8 @@ pub fn chat_completion(
         response_format,
     };
 
-    let body_json = serde_json::to_string(&req_body).map_err(|e| format!("Serialization error: {}", e))?;
+    let body_json =
+        serde_json::to_string(&req_body).map_err(|e| format!("Serialization error: {}", e))?;
     let endpoint = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
 
     let mut req = ureq::post(&endpoint)
@@ -216,10 +223,15 @@ pub fn chat_completion(
         req = req.set("Authorization", &format!("Bearer {}", key));
     }
 
-    let resp = req.send_string(&body_json).map_err(|e| format!("OmniRoute HTTP error: {}", e))?;
+    let resp = req
+        .send_string(&body_json)
+        .map_err(|e| format!("OmniRoute HTTP error: {}", e))?;
 
-    let resp_text = resp.into_string().map_err(|e| format!("Failed to read OmniRoute response: {}", e))?;
-    let resp_json: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| format!("Invalid JSON from OmniRoute: {}", e))?;
+    let resp_text = resp
+        .into_string()
+        .map_err(|e| format!("Failed to read OmniRoute response: {}", e))?;
+    let resp_json: serde_json::Value = serde_json::from_str(&resp_text)
+        .map_err(|e| format!("Invalid JSON from OmniRoute: {}", e))?;
 
     if let Some(err) = resp_json.get("error") {
         return Err(format!("OmniRoute API error: {}", err));
@@ -228,7 +240,7 @@ pub fn chat_completion(
     let content = resp_json
         .get("choices")
         .and_then(|c| c.as_array())
-        .and_then(|arr| arr.get(0))
+        .and_then(|arr| arr.first())
         .and_then(|c0| c0.get("message"))
         .and_then(|m| m.get("content"))
         .and_then(|ct| ct.as_str())

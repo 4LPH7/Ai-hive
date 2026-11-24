@@ -86,7 +86,10 @@ impl Resolver {
 
             if name.ends_with(".md") {
                 let stem = &name[..name.len() - 3];
-                by_name.entry(stem.to_string()).or_default().push(rel.clone());
+                by_name
+                    .entry(stem.to_string())
+                    .or_default()
+                    .push(rel.clone());
                 by_path.insert(rel[..rel.len() - 3].to_lowercase(), rel.clone());
             }
         }
@@ -141,11 +144,7 @@ pub fn links_in(body: &str) -> Vec<String> {
     targets
 }
 
-pub fn check_adr_staleness(
-    rel: &str,
-    text: &str,
-    projects_root: &Path,
-) -> Vec<Finding> {
+pub fn check_adr_staleness(rel: &str, text: &str, projects_root: &Path) -> Vec<Finding> {
     if !rel.starts_with("projects/") || !rel.contains("/adrs/") {
         return Vec::new();
     }
@@ -205,14 +204,20 @@ pub fn check_adr_staleness(
     let sym_re = Regex::new(r"`([A-Za-z_][A-Za-z0-9_:]*)`").unwrap();
     let mut findings = Vec::new();
     let stopwords: HashSet<&str> = [
-        "true", "false", "null", "none", "str", "int", "dict", "bool", "json", "path", "self", "file"
-    ].into_iter().collect();
+        "true", "false", "null", "none", "str", "int", "dict", "bool", "json", "path", "self",
+        "file",
+    ]
+    .into_iter()
+    .collect();
     let mut checked = HashSet::new();
 
     for cap in sym_re.captures_iter(text) {
         if let Some(m) = cap.get(1) {
             let sym = m.as_str();
-            if stopwords.contains(&sym.to_lowercase().as_str()) || sym.len() < 3 || checked.contains(sym) {
+            if stopwords.contains(&sym.to_lowercase().as_str())
+                || sym.len() < 3
+                || checked.contains(sym)
+            {
                 continue;
             }
             checked.insert(sym.to_string());
@@ -223,12 +228,18 @@ pub fn check_adr_staleness(
                     path: rel.to_string(),
                     message: format!("ADR references deleted symbol `{}`", sym),
                 });
-            } else if !known_symbols.is_empty() && !known_symbols.contains(sym) && (sym.contains("::") || sym.chars().skip(1).any(|c| c.is_uppercase())) {
+            } else if !known_symbols.is_empty()
+                && !known_symbols.contains(sym)
+                && (sym.contains("::") || sym.chars().skip(1).any(|c| c.is_uppercase()))
+            {
                 findings.push(Finding {
                     severity: "WARN".to_string(),
                     code: "adr-stale".to_string(),
                     path: rel.to_string(),
-                    message: format!("ADR references symbol `{}` not found in graphify manifest", sym),
+                    message: format!(
+                        "ADR references symbol `{}` not found in graphify manifest",
+                        sym
+                    ),
                 });
             }
         }
@@ -265,9 +276,16 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
         let has_frontmatter = content.starts_with("---") || content.starts_with("\u{feff}---");
         let (meta, _title, body) = parse_note(&content);
 
-        let stem = Path::new(rel).file_stem().and_then(|f| f.to_str()).unwrap_or("").to_string();
+        let stem = Path::new(rel)
+            .file_stem()
+            .and_then(|f| f.to_str())
+            .unwrap_or("")
+            .to_string();
         if !CONVENTIONAL_NAMES.contains(&stem.as_str()) && !rel.starts_with("journal/") {
-            stem_counts.entry(stem.to_lowercase()).or_default().push(rel.clone());
+            stem_counts
+                .entry(stem.to_lowercase())
+                .or_default()
+                .push(rel.clone());
         }
 
         // Secret scan
@@ -341,15 +359,14 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
                 && meta.get("agent").map(|a| a != "user").unwrap_or(false)
                 && SOURCED_PREFIXES.iter().any(|p| rel.starts_with(p))
                 && !rel.ends_with("/playbook.md")
+                && (!meta.contains_key("source") || meta["source"].is_empty())
             {
-                if !meta.contains_key("source") || meta["source"].is_empty() {
-                    findings.push(Finding {
-                        severity: "ERROR".to_string(),
-                        code: "source-missing".to_string(),
-                        path: rel.clone(),
-                        message: "source: required on agent notes created since 2026-11-23".to_string(),
-                    });
-                }
+                findings.push(Finding {
+                    severity: "ERROR".to_string(),
+                    code: "source-missing".to_string(),
+                    path: rel.clone(),
+                    message: "source: required on agent notes created since 2026-11-23".to_string(),
+                });
             }
         }
 
@@ -397,7 +414,11 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
                         severity: "WARN".to_string(),
                         code: "journal-header".to_string(),
                         path: rel.clone(),
-                        message: format!("line {}: header {:?} does not match '## HH:MM agent - Task'", idx + 1, line),
+                        message: format!(
+                            "line {}: header {:?} does not match '## HH:MM agent - Task'",
+                            idx + 1,
+                            line
+                        ),
                     });
                 }
             }
@@ -406,7 +427,7 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
         // Links & ADR tracking
         let links = links_in(&body);
         if meta.get("type").map(|t| t.as_str()) == Some("adr") {
-            findings.extend(check_adr_staleness(&rel, &content, &projects_root));
+            findings.extend(check_adr_staleness(rel, &content, &projects_root));
             adr_statuses.insert(
                 rel.clone(),
                 (
@@ -454,7 +475,10 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
                     severity: "WARN".to_string(),
                     code: "stale-memory".to_string(),
                     path: rel,
-                    message: format!("updated {} days ago ({}); active projects should be refreshed", days, updated),
+                    message: format!(
+                        "updated {} days ago ({}); active projects should be refreshed",
+                        days, updated
+                    ),
                 });
             }
         }
@@ -464,7 +488,10 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
     for (path, (status, _, links)) in &adr_statuses {
         if status == "superseded" {
             let has_adr_link = links.iter().any(|target| {
-                resolver.resolve(target).iter().any(|p| p.contains("/adrs/"))
+                resolver
+                    .resolve(target)
+                    .iter()
+                    .any(|p| p.contains("/adrs/"))
             });
             if !has_adr_link {
                 findings.push(Finding {
@@ -507,13 +534,19 @@ pub fn format_report(findings: &[Finding]) -> String {
             _ => counts[2] += 1,
         }
     }
-    let head = format!("lint: {} error, {} warn, {} info", counts[0], counts[1], counts[2]);
+    let head = format!(
+        "lint: {} error, {} warn, {} info",
+        counts[0], counts[1], counts[2]
+    );
     if findings.is_empty() {
         return head;
     }
     let mut lines = vec![head];
     for f in findings {
-        lines.push(format!("{:5} {:20} {}: {}", f.severity, f.code, f.path, f.message));
+        lines.push(format!(
+            "{:5} {:20} {}: {}",
+            f.severity, f.code, f.path, f.message
+        ));
     }
     lines.join("\n")
 }
@@ -531,7 +564,9 @@ mod tests {
         fs::write(&file, "---\ntype: note\nproject: proj\nstatus: active\nupdated: 2026-11-24\n---\napi_key = sk-ant-api03-123456789012345678901234").unwrap();
 
         let findings = lint(&temp_dir, None);
-        assert!(findings.iter().any(|f| f.code == "secret-detected" && f.severity == "ERROR"));
+        assert!(findings
+            .iter()
+            .any(|f| f.code == "secret-detected" && f.severity == "ERROR"));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

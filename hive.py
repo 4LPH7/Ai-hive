@@ -31,6 +31,31 @@ def canonical_path(p):
     except (ValueError, OSError):
         return Path(p)
 
+def _strip_inline_comment(s):
+    in_single = False
+    in_double = False
+    escaped = False
+    for i, c in enumerate(s):
+        if escaped:
+            escaped = False
+            continue
+        if c == "\\" and in_double:
+            escaped = True
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+        elif c == '"' and not in_single:
+            in_double = not in_double
+        elif c == '#' and not in_single and not in_double:
+            return s[:i]
+    return s
+
+def _unquote(s):
+    s = s.strip()
+    if len(s) >= 2 and ((s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'"))):
+        return s[1:-1]
+    return s
+
 def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_ledger=None, cli_config=None):
     """Hierarchical config: CLI flags -> ENV vars -> config.toml -> OS defaults."""
     config_data = {}
@@ -57,6 +82,9 @@ def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_ledger=None,
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
+                line = _strip_inline_comment(line).strip()
+                if not line:
+                    continue
                 if line.startswith("[") and line.endswith("]"):
                     sec = line[1:-1].strip().lower()
                     prefix = f"{sec}." if sec and sec != "hive" else ""
@@ -64,7 +92,7 @@ def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_ledger=None,
                 k, sep, v = line.partition("=")
                 if sep:
                     raw_k = k.strip().lower()
-                    val = v.strip().strip("'\"")
+                    val = _unquote(v)
                     if prefix:
                         config_data[f"{prefix}{raw_k}"] = val
                     config_data.setdefault(raw_k, val)
@@ -893,12 +921,20 @@ def tool_skill(task, auto_install=True, scope="all"):
                 return f"> [!WARNING] Auto-install failed for {top.package_name}: {res.get('error', 'unknown error')}"
 
         if candidates and not auto_install_bool:
+            try:
+                ledger.record(LEDGER_PATH, event="skill", project="", query=task_str, hits=[], duration_ms=(time.time() - t0) * 1000.0)
+            except Exception:
+                pass
             lines = [f"No matching local skill for task: {task_str!r}. Top remote candidates:"]
             for c in candidates[:3]:
                 lines.append(f"- `{c.package_name}` ({c.stars} stars): {c.description}")
             lines.append(f"\nTo install: npx skills add {candidates[0].package_name}")
             return "\n".join(lines)
 
+    try:
+        ledger.record(LEDGER_PATH, event="skill", project="", query=task_str, hits=[], duration_ms=(time.time() - t0) * 1000.0)
+    except Exception:
+        pass
     return f"no local or remote skills found matching task: {task_str!r}"
 
 
@@ -1202,16 +1238,18 @@ def tool_mine(*args):
 def tool_curate(*args):
     import argparse
     import curate
-    cfg = load_config()
     parser = argparse.ArgumentParser(prog="hive curate")
     parser.add_argument("--project")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--config")
     parsed = parser.parse_args(args)
+    cfg = load_config(cli_config=parsed.config)
     res = curate.run_curate(
         ledger_path=cfg["ledger"],
         vault_path=cfg["vault"],
         project=parsed.project,
         dry_run=parsed.dry_run,
+        config_path=parsed.config,
     )
     if res.get("skipped"):
         return f"curate: {res.get('model')} ({res.get('reason')})"

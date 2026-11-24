@@ -7,9 +7,10 @@ name = "ai-hive"
 version = "2.5.0"
 description = "Shared memory for all AI coding agents (Obsidian vault + graphify code graphs)"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
-    { name = "Google DeepMind Team" }
+    { name = "4LPH7" }
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -17,7 +18,15 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Operating System :: OS Independent",
+    "License :: OSI Approved :: MIT License",
 ]
+
+[project.urls]
+Repository = "https://github.com/4LPH7/Ai-hive"
+Issues = "https://github.com/4LPH7/Ai-hive/issues"
 
 [project.scripts]
 hive = "hive:main"
+
+[tool.setuptools]
+py-modules = ["hive", "ace", "curate", "ledger", "lint", "llm", "miner", "skill"]

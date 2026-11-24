@@ -30,12 +30,14 @@ pub fn detect_agent() -> String {
     if std::env::var("CODEX_HOME").is_ok() || std::env::var("CODEX_SESSION").is_ok() {
         return "codex".to_string();
     }
-    if std::env::var("ANTIGRAVITY_CONFIG_DIR").is_ok() || std::env::var("GEMINI_CONFIG_DIR").is_ok() {
+    if std::env::var("ANTIGRAVITY_CONFIG_DIR").is_ok() || std::env::var("GEMINI_CONFIG_DIR").is_ok()
+    {
         return "antigravity".to_string();
     }
     "unknown".to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn record(
     ledger_path: &Path,
     event: &str,
@@ -56,9 +58,7 @@ pub fn record(
             .map(|s| s.to_string())
             .or_else(|| std::env::var("HIVE_SESSION_ID").ok())
             .unwrap_or_default(),
-        agent: agent
-            .map(|s| s.to_string())
-            .unwrap_or_else(detect_agent),
+        agent: agent.map(|s| s.to_string()).unwrap_or_else(detect_agent),
         project: project.to_string(),
         event: event.to_string(),
         query: query.to_string(),
@@ -83,7 +83,11 @@ pub fn record(
             true
         }
         Err(e) => {
-            eprintln!("hive ledger: warning: failed to append to {}: {}", ledger_path.display(), e);
+            eprintln!(
+                "hive ledger: warning: failed to append to {}: {}",
+                ledger_path.display(),
+                e
+            );
             false
         }
     }
@@ -217,10 +221,8 @@ pub fn score_session(
                 bullets.push(b.clone());
             }
         }
-        if e.event == "skill" && !e.project.is_empty() {
-            if !skills.contains(&e.project) {
-                skills.push(e.project.clone());
-            }
+        if e.event == "skill" && !e.project.is_empty() && !skills.contains(&e.project) {
+            skills.push(e.project.clone());
         }
     }
 
@@ -290,7 +292,8 @@ mod tests {
 
     #[test]
     fn test_record_and_read_roundtrip() {
-        let tmp = std::env::temp_dir().join(format!("hive_ledger_test_{}.jsonl", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("hive_ledger_test_{}.jsonl", std::process::id()));
         let ok = record(
             &tmp,
             "query",

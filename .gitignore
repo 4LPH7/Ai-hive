@@ -6,3 +6,8 @@ __pycache__/
 .venv/
 target/
 eval_golden.json
+.planning/
+.agent/
+config.toml
+hive.toml
+

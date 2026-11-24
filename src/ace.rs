@@ -33,7 +33,11 @@ pub fn is_pid_alive(pid: u32) -> bool {
     }
     #[link(name = "kernel32")]
     extern "system" {
-        fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> *mut std::ffi::c_void;
+        fn OpenProcess(
+            dwDesiredAccess: u32,
+            bInheritHandle: i32,
+            dwProcessId: u32,
+        ) -> *mut std::ffi::c_void;
         fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
     }
     unsafe {
@@ -111,10 +115,7 @@ impl PlaybookLock {
                     let parts: Vec<&str> = content.trim().split(':').collect();
                     let lock_host = parts.get(1).copied().unwrap_or("");
                     if !lock_host.is_empty() && lock_host != hostname {
-                        return Err(format!(
-                            "playbook locked by foreign host {}",
-                            lock_host
-                        ));
+                        return Err(format!("playbook locked by foreign host {}", lock_host));
                     }
                 }
                 return Err(format!(
@@ -127,12 +128,17 @@ impl PlaybookLock {
             if elapsed > std::time::Duration::from_millis(500) {
                 if let Ok(content) = fs::read_to_string(&lock_path) {
                     let parts: Vec<&str> = content.trim().split(':').collect();
-                    let lock_pid = parts.get(0).and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+                    let lock_pid = parts
+                        .first()
+                        .and_then(|p| p.parse::<u32>().ok())
+                        .unwrap_or(0);
                     let lock_host = parts.get(1).copied().unwrap_or("");
                     let is_stale = lock_host == hostname && lock_pid > 0 && !is_pid_alive(lock_pid);
 
                     let age = match lock_path.metadata().and_then(|m| m.modified()) {
-                        Ok(m) => std::time::SystemTime::now().duration_since(m).unwrap_or(std::time::Duration::ZERO),
+                        Ok(m) => std::time::SystemTime::now()
+                            .duration_since(m)
+                            .unwrap_or(std::time::Duration::ZERO),
                         Err(_) => std::time::Duration::ZERO,
                     };
 
@@ -272,7 +278,10 @@ pub fn parse(text: &str) -> HashMap<String, Vec<Bullet>> {
                 let id = cap[1].to_string();
                 let helpful = cap[4].parse::<i64>().unwrap_or(0);
                 let harmful = cap[5].parse::<i64>().unwrap_or(0);
-                let seen = cap.get(2).and_then(|m| m.as_str().parse::<i64>().ok()).unwrap_or(helpful + harmful);
+                let seen = cap
+                    .get(2)
+                    .and_then(|m| m.as_str().parse::<i64>().ok())
+                    .unwrap_or(helpful + harmful);
                 let explicit_updated = cap.get(3).map(|m| m.as_str().to_string());
                 let updated = explicit_updated.clone().or_else(|| default_updated.clone());
                 let content = cap[6].trim().to_string();
@@ -310,7 +319,11 @@ pub fn render(scope: &str, sections: &HashMap<String, Vec<Bullet>>, today: &str)
                     body.push(format!(
                         "- [{}] seen={} updated={} helpful={} harmful={} :: {}",
                         b.id,
-                        if b.seen > 0 { b.seen } else { b.helpful + b.harmful },
+                        if b.seen > 0 {
+                            b.seen
+                        } else {
+                            b.helpful + b.harmful
+                        },
                         up,
                         b.helpful,
                         b.harmful,
@@ -320,7 +333,11 @@ pub fn render(scope: &str, sections: &HashMap<String, Vec<Bullet>>, today: &str)
                     body.push(format!(
                         "- [{}] seen={} helpful={} harmful={} :: {}",
                         b.id,
-                        if b.seen > 0 { b.seen } else { b.helpful + b.harmful },
+                        if b.seen > 0 {
+                            b.seen
+                        } else {
+                            b.helpful + b.harmful
+                        },
                         b.helpful,
                         b.harmful,
                         b.content
@@ -347,14 +364,19 @@ pub fn load(vault: &Path, scope: &str) -> Result<HashMap<String, Vec<Bullet>>, S
     }
 }
 
-pub fn save(vault: &Path, scope: &str, sections: &HashMap<String, Vec<Bullet>>, today: Option<&str>) -> Result<(), String> {
+pub fn save(
+    vault: &Path,
+    scope: &str,
+    sections: &HashMap<String, Vec<Bullet>>,
+    today: Option<&str>,
+) -> Result<(), String> {
     let path = scope_path(vault, scope)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let today_str = today.map(|t| t.to_string()).unwrap_or_else(|| {
-        chrono::Local::now().format("%Y-%m-%d").to_string()
-    });
+    let today_str = today
+        .map(|t| t.to_string())
+        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     let rendered = render(scope, sections, &today_str);
 
     let tmp = path.with_extension("tmp");
@@ -383,10 +405,7 @@ pub struct DeltaOps {
     pub remove: Option<Vec<String>>,
 }
 
-pub fn apply(
-    sections: &mut HashMap<String, Vec<Bullet>>,
-    ops: &DeltaOps,
-) -> Result<usize, String> {
+pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Result<usize, String> {
     let mut changed = 0usize;
 
     // 1. Process TAG
@@ -409,9 +428,23 @@ pub fn apply(
                 }
             }
             if !found && t.id.starts_with("skill:") {
-                let tag_str = if t.helpful.unwrap_or(0) > 0 { "helpful" } else { "harmful" };
+                let tag_str = if t.helpful.unwrap_or(0) > 0 {
+                    "helpful"
+                } else {
+                    "harmful"
+                };
                 let skill_name = &t.id[6..];
-                let _ = crate::ledger::record(&crate::ledger::default_ledger_path(), "skill_feedback", skill_name, tag_str, &[], &[], 0.0, None, None);
+                let _ = crate::ledger::record(
+                    &crate::ledger::default_ledger_path(),
+                    "skill_feedback",
+                    skill_name,
+                    tag_str,
+                    &[],
+                    &[],
+                    0.0,
+                    None,
+                    None,
+                );
                 changed += 1;
             }
         }
@@ -448,7 +481,10 @@ pub fn apply(
             let bullets = sections.get_mut(&sec_name).unwrap();
 
             // Deduplication via Jaccard: reinforce seen counter, NOT helpful
-            if let Some(existing) = bullets.iter_mut().find(|b| jaccard_similarity(&b.content, content) >= DUP_JACCARD) {
+            if let Some(existing) = bullets
+                .iter_mut()
+                .find(|b| jaccard_similarity(&b.content, content) >= DUP_JACCARD)
+            {
                 existing.seen += 1;
                 changed += 1;
                 continue;
@@ -499,7 +535,7 @@ pub fn apply(
                 all.push((sec.clone(), b.clone()));
             }
         }
-        all.sort_by(|a, b| (b.1.helpful - b.1.harmful).cmp(&(a.1.helpful - a.1.harmful)));
+        all.sort_by_key(|a| std::cmp::Reverse(a.1.helpful - a.1.harmful));
         all.truncate(MAX_BULLETS);
 
         for bullets in sections.values_mut() {
@@ -513,11 +549,7 @@ pub fn apply(
     Ok(changed)
 }
 
-pub fn apply_with_lock(
-    vault: &Path,
-    scope: &str,
-    ops: &DeltaOps,
-) -> Result<usize, String> {
+pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usize, String> {
     let path = scope_path(vault, scope)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -536,7 +568,7 @@ pub fn select_bullets(
 ) -> Vec<Bullet> {
     let mut all: Vec<Bullet> = sections.values().flatten().cloned().collect();
     if task.is_empty() {
-        all.sort_by(|a, b| (b.helpful - b.harmful).cmp(&(a.helpful - a.harmful)));
+        all.sort_by_key(|a| std::cmp::Reverse(a.helpful - a.harmful));
     } else {
         all.sort_by(|a, b| {
             let sc_a = (a.helpful - a.harmful) as f64 + jaccard_similarity(&a.content, task) * 5.0;
@@ -551,7 +583,12 @@ pub fn select_bullets(
 pub fn format_bullets(bullets: &[Bullet]) -> String {
     bullets
         .iter()
-        .map(|b| format!("- [{}] helpful={} harmful={} :: {}", b.id, b.helpful, b.harmful, b.content))
+        .map(|b| {
+            format!(
+                "- [{}] helpful={} harmful={} :: {}",
+                b.id, b.helpful, b.harmful, b.content
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -562,7 +599,9 @@ mod tests {
 
     #[test]
     fn test_secret_detection() {
-        assert!(is_secret("sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456789"));
+        assert!(is_secret(
+            "sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456789"
+        ));
         assert!(is_secret("ghp_123456789012345678901234567890123456"));
         assert!(!is_secret("use cargo test to run unit tests"));
     }
@@ -575,9 +614,10 @@ mod tests {
         }
 
         let ops = DeltaOps {
-            add: Some(vec![
-                AddOp { section: "strategies".to_string(), content: "Always check memory before refactoring".to_string() }
-            ]),
+            add: Some(vec![AddOp {
+                section: "strategies".to_string(),
+                content: "Always check memory before refactoring".to_string(),
+            }]),
             tag: None,
             remove: None,
         };
@@ -588,9 +628,10 @@ mod tests {
 
         // Add near-duplicate -> reinforces existing
         let dup_ops = DeltaOps {
-            add: Some(vec![
-                AddOp { section: "strategies".to_string(), content: "Always check memory before any refactoring".to_string() }
-            ]),
+            add: Some(vec![AddOp {
+                section: "strategies".to_string(),
+                content: "Always check memory before any refactoring".to_string(),
+            }]),
             tag: None,
             remove: None,
         };

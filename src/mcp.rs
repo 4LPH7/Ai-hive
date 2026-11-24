@@ -3,7 +3,7 @@ use crate::common::{
     active_work_cell_matches, default_db_path, default_projects, note_age, slugify, validate_slug,
 };
 use crate::graph::{fmt_node, repo_dir, Graph};
-use crate::index::{Index, parse_note};
+use crate::index::{parse_note, Index};
 use crate::lint::{format_report, lint};
 use crate::packer::{default_section_weight, pack, Section};
 use serde_json::{json, Value};
@@ -122,7 +122,10 @@ pub fn tool_list() -> Value {
 
 pub fn validate_tool_args(name: &str, args: &Value) -> Result<(), String> {
     let obj = args.as_object().ok_or_else(|| {
-        format!("arguments must be a JSON object, got {}", if args.is_null() { "null" } else { "non-object" })
+        format!(
+            "arguments must be a JSON object, got {}",
+            if args.is_null() { "null" } else { "non-object" }
+        )
     })?;
 
     match name {
@@ -274,8 +277,12 @@ pub fn graph_freshness(dir: &Path, g: &Graph) -> String {
             for (rel, info) in val {
                 let target_file = dir.join(&rel);
                 if let Ok(meta) = fs::metadata(&target_file) {
-                    let dur = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                        .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+                    let dur = meta
+                        .modified()
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs_f64();
                     let recorded_mtime = info.get("mtime").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     if (dur - recorded_mtime).abs() > 1e-3 {
                         changed.push(rel);
@@ -285,25 +292,69 @@ pub fn graph_freshness(dir: &Path, g: &Graph) -> String {
                 }
             }
             if changed.is_empty() {
-                let commit_short = if g.commit.len() >= 8 { &g.commit[..8] } else { &g.commit };
-                return format!("graph current (no tracked file changed since build at {})", if commit_short.is_empty() { "unknown commit" } else { commit_short });
+                let commit_short = if g.commit.len() >= 8 {
+                    &g.commit[..8]
+                } else {
+                    &g.commit
+                };
+                return format!(
+                    "graph current (no tracked file changed since build at {})",
+                    if commit_short.is_empty() {
+                        "unknown commit"
+                    } else {
+                        commit_short
+                    }
+                );
             } else {
                 let count = changed.len();
-                let names = changed.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
-                let more = if count > 5 { format!(" +{} more", count - 5) } else { String::new() };
-                return format!("graph STALE for {} file(s): {}{}; run `graphify update .` in {}", count, names, more, dir.display());
+                let names = changed
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let more = if count > 5 {
+                    format!(" +{} more", count - 5)
+                } else {
+                    String::new()
+                };
+                return format!(
+                    "graph STALE for {} file(s): {}{}; run `graphify update .` in {}",
+                    count,
+                    names,
+                    more,
+                    dir.display()
+                );
             }
         }
     }
-    let commit_short = if g.commit.len() >= 8 { &g.commit[..8] } else { &g.commit };
+    let commit_short = if g.commit.len() >= 8 {
+        &g.commit[..8]
+    } else {
+        &g.commit
+    };
     format!("graph built at {}", commit_short)
 }
 
-pub fn tool_graph(idx: &mut Index, repo: &str, query: &str, limit: usize) -> Result<String, String> {
-    let d = repo_dir(repo).ok_or_else(|| format!("no repo folder matching {:?} under {}", repo, default_projects().display()))?;
+pub fn tool_graph(
+    idx: &mut Index,
+    repo: &str,
+    query: &str,
+    limit: usize,
+) -> Result<String, String> {
+    let d = repo_dir(repo).ok_or_else(|| {
+        format!(
+            "no repo folder matching {:?} under {}",
+            repo,
+            default_projects().display()
+        )
+    })?;
     let graph_path = d.join("graphify-out").join("graph.json");
     if !graph_path.is_file() {
-        return Err(format!("{} has no graphify-out/graph.json; run `graphify update .` there", d.file_name().and_then(|f| f.to_str()).unwrap_or("repo")));
+        return Err(format!(
+            "{} has no graphify-out/graph.json; run `graphify update .` there",
+            d.file_name().and_then(|f| f.to_str()).unwrap_or("repo")
+        ));
     }
     let graph_str = fs::read_to_string(&graph_path).map_err(|e| e.to_string())?;
     let g = Graph::from_json_str(&graph_str)?;
@@ -313,11 +364,19 @@ pub fn tool_graph(idx: &mut Index, repo: &str, query: &str, limit: usize) -> Res
     let repo_name = d.file_name().and_then(|f| f.to_str()).unwrap_or("repo");
 
     if ranked.is_empty() {
-        return Ok(format!("no symbols in {} match {:?}. {}", repo_name, query, freshness));
+        return Ok(format!(
+            "no symbols in {} match {:?}. {}",
+            repo_name, query, freshness
+        ));
     }
 
     let mut lines = vec![
-        format!("{}: {} nodes, {}. * = matched seed", repo_name, g.nodes.len(), freshness),
+        format!(
+            "{}: {} nodes, {}. * = matched seed",
+            repo_name,
+            g.nodes.len(),
+            freshness
+        ),
         String::new(),
     ];
 
@@ -350,7 +409,11 @@ pub fn tool_graph(idx: &mut Index, repo: &str, query: &str, limit: usize) -> Res
         let stem_query = stems.into_iter().collect::<Vec<_>>().join(" ");
         let slug = slugify(repo_name);
         if let Ok(hits) = idx.search(&stem_query, &slug, 8, "project") {
-            let notes: Vec<_> = hits.into_iter().filter(|h| h.project == slug).take(4).collect();
+            let notes: Vec<_> = hits
+                .into_iter()
+                .filter(|h| h.project == slug)
+                .take(4)
+                .collect();
             if !notes.is_empty() {
                 lines.push(String::new());
                 lines.push("vault notes about these files:".to_string());
@@ -405,12 +468,18 @@ pub fn tool_context(
         let framed_body = format!("{}\n{}", header, quoted_body.join("\n"));
         mem_parts.push(format!("## {} ({})\n{}", mem_rel, age, framed_body));
     } else {
-        mem_parts.push(format!("## {}\n(none yet: create it from templates/project-memory.md)", mem_rel));
+        mem_parts.push(format!(
+            "## {}\n(none yet: create it from templates/project-memory.md)",
+            mem_rel
+        ));
     }
 
     if let Ok(adrs) = idx.by_project(&slug, "adr") {
         if !adrs.is_empty() {
-            let adr_lines: Vec<String> = adrs.into_iter().map(|(p, t, s, _)| format!("- {} [{}] {}", p, s, t)).collect();
+            let adr_lines: Vec<String> = adrs
+                .into_iter()
+                .map(|(p, t, s, _)| format!("- {} [{}] {}", p, s, t))
+                .collect();
             mem_parts.push(format!("## ADRs\n{}", adr_lines.join("\n")));
         }
     }
@@ -440,12 +509,23 @@ pub fn tool_context(
         if let Ok(hits) = idx.search(task, &slug, 6, "project") {
             let filtered: Vec<_> = hits
                 .into_iter()
-                .filter(|h| !h.path.ends_with("/_memory.md") && (h.project == slug || h.project.is_empty() || h.project == "global"))
+                .filter(|h| {
+                    !h.path.ends_with("/_memory.md")
+                        && (h.project == slug || h.project.is_empty() || h.project == "global")
+                })
                 .collect();
             if !filtered.is_empty() {
                 let note_lines: Vec<String> = filtered
                     .into_iter()
-                    .map(|h| format!("- {} ({}, age {}): {}", h.path, h.agent, note_age(&h.updated), h.snippet))
+                    .map(|h| {
+                        format!(
+                            "- {} ({}, age {}): {}",
+                            h.path,
+                            h.agent,
+                            note_age(&h.updated),
+                            h.snippet
+                        )
+                    })
                     .collect();
                 task_notes_section = format!("## notes for this task\n{}", note_lines.join("\n"));
             }
@@ -462,10 +542,26 @@ pub fn tool_context(
     }
 
     let sections = [
-        Section { name: "memory", text: &memory_section, weight: default_section_weight("memory") },
-        Section { name: "playbook", text: &playbook_section, weight: default_section_weight("playbook") },
-        Section { name: "task_notes", text: &task_notes_section, weight: default_section_weight("task_notes") },
-        Section { name: "code_graph", text: &code_graph_section, weight: default_section_weight("code_graph") },
+        Section {
+            name: "memory",
+            text: &memory_section,
+            weight: default_section_weight("memory"),
+        },
+        Section {
+            name: "playbook",
+            text: &playbook_section,
+            weight: default_section_weight("playbook"),
+        },
+        Section {
+            name: "task_notes",
+            text: &task_notes_section,
+            weight: default_section_weight("task_notes"),
+        },
+        Section {
+            name: "code_graph",
+            text: &code_graph_section,
+            weight: default_section_weight("code_graph"),
+        },
     ];
 
     Ok(pack(&sections, budget))
@@ -491,7 +587,7 @@ pub fn tool_skill(task: &str, auto_install: bool, scope: &str) -> Result<String,
                 "skill",
                 &s.name,
                 task_str,
-                &[s.path.clone()],
+                std::slice::from_ref(&s.path),
                 &[],
                 dur_ms,
                 None,
@@ -526,20 +622,59 @@ pub fn tool_skill(task: &str, auto_install: bool, scope: &str) -> Result<String,
                     ));
                 }
                 Err(err) => {
-                    return Ok(format!("> [!WARNING] Auto-install failed for {}: {}", top.package_name, err));
+                    return Ok(format!(
+                        "> [!WARNING] Auto-install failed for {}: {}",
+                        top.package_name, err
+                    ));
                 }
             }
         } else if !candidates.is_empty() && !auto_install {
-            let mut lines = vec![format!("No matching local skill for task: {:?}. Top remote candidates:", task_str)];
+            let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let _ = crate::ledger::record(
+                &crate::ledger::default_ledger_path(),
+                "skill",
+                "",
+                task_str,
+                &[],
+                &[],
+                dur_ms,
+                None,
+                None,
+            );
+            let mut lines = vec![format!(
+                "No matching local skill for task: {:?}. Top remote candidates:",
+                task_str
+            )];
             for c in candidates.iter().take(3) {
-                lines.push(format!("- `{}` ({} stars): {}", c.package_name, c.stars, c.description));
+                lines.push(format!(
+                    "- `{}` ({} stars): {}",
+                    c.package_name, c.stars, c.description
+                ));
             }
-            lines.push(format!("\nTo install: npx skills add {}", candidates[0].package_name));
+            lines.push(format!(
+                "\nTo install: npx skills add {}",
+                candidates[0].package_name
+            ));
             return Ok(lines.join("\n"));
         }
     }
 
-    Ok(format!("no local or remote skills found matching task: {:?}", task_str))
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let _ = crate::ledger::record(
+        &crate::ledger::default_ledger_path(),
+        "skill",
+        "",
+        task_str,
+        &[],
+        &[],
+        dur_ms,
+        None,
+        None,
+    );
+    Ok(format!(
+        "no local or remote skills found matching task: {:?}",
+        task_str
+    ))
 }
 
 pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
@@ -548,17 +683,17 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
 
     match method {
         "initialize" => {
-            let client_ver = req.pointer("/params/protocolVersion")
+            let client_ver = req
+                .pointer("/params/protocolVersion")
                 .and_then(|v| v.as_str())
                 .unwrap_or("2024-11-05");
 
-            let supported_ver = if MODERN_VERSIONS.contains(&client_ver) {
-                client_ver
-            } else if LEGACY_VERSIONS.contains(&client_ver) {
-                client_ver
-            } else {
-                "2024-11-05"
-            };
+            let supported_ver =
+                if MODERN_VERSIONS.contains(&client_ver) || LEGACY_VERSIONS.contains(&client_ver) {
+                    client_ver
+                } else {
+                    "2024-11-05"
+                };
 
             Some(json!({
                 "jsonrpc": "2.0",
@@ -580,17 +715,18 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
         }
         "notifications/initialized" => None,
         "ping" => Some(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
-        "tools/list" => {
-            Some(json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "tools": tool_list()
-                }
-            }))
-        }
+        "tools/list" => Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "tools": tool_list()
+            }
+        })),
         "tools/call" => {
-            let tool_name = req.pointer("/params/name").and_then(|v| v.as_str()).unwrap_or("");
+            let tool_name = req
+                .pointer("/params/name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let empty_args = json!({});
             let tool_args = req.pointer("/params/arguments").unwrap_or(&empty_args);
 
@@ -610,18 +746,35 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
 
             let call_res: Result<String, String> = match tool_name {
                 "hive_context" => {
-                    let project = tool_args.get("project").and_then(|v| v.as_str()).unwrap_or("");
+                    let project = tool_args
+                        .get("project")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let task = tool_args.get("task").and_then(|v| v.as_str()).unwrap_or("");
-                    let budget = tool_args.get("budget").and_then(|v| v.as_u64()).unwrap_or(1500) as usize;
+                    let budget = tool_args
+                        .get("budget")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(1500) as usize;
                     tool_context(idx, project, task, budget)
                 }
                 "hive_search" => {
-                    let query = tool_args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                    let project = tool_args.get("project").and_then(|v| v.as_str()).unwrap_or("");
-                    let scope = tool_args.get("scope").and_then(|v| v.as_str()).unwrap_or_else(|| {
-                        if !project.is_empty() { "project" } else { "all" }
+                    let query = tool_args
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let project = tool_args
+                        .get("project")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let scope = tool_args.get("scope").and_then(|v| v.as_str()).unwrap_or({
+                        if !project.is_empty() {
+                            "project"
+                        } else {
+                            "all"
+                        }
                     });
-                    let limit = tool_args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
+                    let limit =
+                        tool_args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
                     match idx.search(query, project, limit, scope) {
                         Ok(hits) => {
                             if hits.is_empty() {
@@ -629,7 +782,17 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                             } else {
                                 let lines: Vec<String> = hits
                                     .into_iter()
-                                    .map(|h| format!("- {} ({}, {}, {}) {}\n  {}", h.path, h.r#type, h.status, h.updated, h.title, h.snippet))
+                                    .map(|h| {
+                                        format!(
+                                            "- {} ({}, {}, {}) {}\n  {}",
+                                            h.path,
+                                            h.r#type,
+                                            h.status,
+                                            h.updated,
+                                            h.title,
+                                            h.snippet
+                                        )
+                                    })
                                     .collect();
                                 Ok(lines.join("\n"))
                             }
@@ -639,15 +802,29 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                 }
                 "hive_graph" => {
                     let repo = tool_args.get("repo").and_then(|v| v.as_str()).unwrap_or("");
-                    let query = tool_args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                    let limit = tool_args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
+                    let query = tool_args
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let limit = tool_args
+                        .get("limit")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(15) as usize;
                     tool_graph(idx, repo, query, limit)
                 }
                 "hive_status" => {
                     let _ = idx.refresh(true);
                     let mut lines = Vec::new();
-                    let total: i64 = idx.conn.query_row("SELECT count(*) FROM notes", [], |r| r.get(0)).unwrap_or(0);
-                    lines.push(format!("vault {}: {} notes indexed ({})", idx.vault.display(), total, default_db_path().display()));
+                    let total: i64 = idx
+                        .conn
+                        .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+                        .unwrap_or(0);
+                    lines.push(format!(
+                        "vault {}: {} notes indexed ({})",
+                        idx.vault.display(),
+                        total,
+                        default_db_path().display()
+                    ));
                     Ok(lines.join("\n"))
                 }
                 "hive_lint" => {
@@ -656,8 +833,14 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                 }
                 "hive_skill" => {
                     let task = tool_args.get("task").and_then(|v| v.as_str()).unwrap_or("");
-                    let auto_install = tool_args.get("auto_install").and_then(|v| v.as_bool()).unwrap_or(true);
-                    let scope = tool_args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
+                    let auto_install = tool_args
+                        .get("auto_install")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let scope = tool_args
+                        .get("scope")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("all");
                     tool_skill(task, auto_install, scope)
                 }
                 other => Err(format!("tool {:?} not found", other)),
@@ -759,6 +942,9 @@ mod tests {
     fn test_argument_validation() {
         assert!(validate_tool_args("hive_context", &json!({"project": "ai-hive"})).is_ok());
         assert!(validate_tool_args("hive_context", &json!({})).is_err());
-        assert!(validate_tool_args("hive_context", &json!({"project": "ai-hive", "extra": 123})).is_err());
+        assert!(
+            validate_tool_args("hive_context", &json!({"project": "ai-hive", "extra": 123}))
+                .is_err()
+        );
     }
 }

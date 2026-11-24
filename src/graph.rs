@@ -45,9 +45,17 @@ pub fn kind_prior(k: &str) -> f64 {
 }
 
 pub fn node_prior(n: &Node) -> f64 {
-    let path = n.source_file.as_deref().unwrap_or("").replace('\\', "/").to_lowercase();
+    let path = n
+        .source_file
+        .as_deref()
+        .unwrap_or("")
+        .replace('\\', "/")
+        .to_lowercase();
     let is_test = path.contains("/tests/")
-        || Path::new(&path).file_name().and_then(|f| f.to_str()).map_or(false, |name| name.starts_with("test_"))
+        || Path::new(&path)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .is_some_and(|name| name.starts_with("test_"))
         || path.ends_with("_test.py");
     let base = kind_prior(n.file_type.as_deref().unwrap_or(""));
     let test_mult = if is_test { 0.6 } else { 1.0 };
@@ -126,11 +134,24 @@ impl Graph {
                 continue;
             }
             let w = e.confidence_score.unwrap_or(0.5) * rel_weight(&rel);
-            let prev_out = out_adj.entry(s.clone()).or_default().get(&t).map(|x| x.0).unwrap_or(0.0);
+            let prev_out = out_adj
+                .entry(s.clone())
+                .or_default()
+                .get(&t)
+                .map(|x| x.0)
+                .unwrap_or(0.0);
             if w > prev_out {
-                out_adj.entry(s.clone()).or_default().insert(t.clone(), (w, rel.clone()));
+                out_adj
+                    .entry(s.clone())
+                    .or_default()
+                    .insert(t.clone(), (w, rel.clone()));
             }
-            let prev_in = in_adj.entry(t.clone()).or_default().get(&s).map(|x| x.0).unwrap_or(0.0);
+            let prev_in = in_adj
+                .entry(t.clone())
+                .or_default()
+                .get(&s)
+                .map(|x| x.0)
+                .unwrap_or(0.0);
             if w > prev_in {
                 in_adj.entry(t).or_default().insert(s, (w, rel));
             }
@@ -142,7 +163,11 @@ impl Graph {
                 .file_stem()
                 .and_then(|f| f.to_str())
                 .unwrap_or("");
-            let words = [split_ident(n.label.as_deref().unwrap_or("")), split_ident(stem)].concat();
+            let words = [
+                split_ident(n.label.as_deref().unwrap_or("")),
+                split_ident(stem),
+            ]
+            .concat();
             for tok in words {
                 tokens.entry(tok).or_default().insert(nid.clone());
             }
@@ -198,7 +223,11 @@ impl Graph {
             .collect();
 
         scored_list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored_list.into_iter().take(k).map(|(nid, _)| nid).collect()
+        scored_list
+            .into_iter()
+            .take(k)
+            .map(|(nid, _)| nid)
+            .collect()
     }
 
     pub fn rank(&self, seeds: &[String], hops: usize, iters: usize) -> HashMap<String, f64> {
@@ -251,14 +280,18 @@ impl Graph {
             }
             let total: f64 = nbrs.iter().map(|(_, w)| *w).sum();
             if total > 0.0 {
-                out.insert(a.clone(), nbrs.into_iter().map(|(b, w)| (b, w / total)).collect());
+                out.insert(
+                    a.clone(),
+                    nbrs.into_iter().map(|(b, w)| (b, w / total)).collect(),
+                );
             } else {
                 out.insert(a.clone(), Vec::new());
             }
         }
 
         let restart_prob = 1.0 / (seeds.len() as f64);
-        let mut rank: HashMap<String, f64> = seeds.iter().map(|s| (s.clone(), restart_prob)).collect();
+        let mut rank: HashMap<String, f64> =
+            seeds.iter().map(|s| (s.clone(), restart_prob)).collect();
 
         for _ in 0..iters {
             let mut nxt: HashMap<String, f64> = HashMap::new();
@@ -279,7 +312,8 @@ impl Graph {
             }
 
             for s in seeds {
-                *nxt.entry(s.clone()).or_default() += (PPR_RESTART + (1.0 - PPR_RESTART) * dangling) * restart_prob;
+                *nxt.entry(s.clone()).or_default() +=
+                    (PPR_RESTART + (1.0 - PPR_RESTART) * dangling) * restart_prob;
             }
             rank = nxt;
         }
@@ -287,7 +321,12 @@ impl Graph {
         rank
     }
 
-    pub fn query(&self, query: &str, limit: usize) -> (Vec<(String, f64, bool)>, Vec<(String, String, String)>) {
+    #[allow(clippy::type_complexity)]
+    pub fn query(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> (Vec<(String, f64, bool)>, Vec<(String, String, String)>) {
         let seeds = self.seeds(query, 6);
         if seeds.is_empty() {
             return (Vec::new(), Vec::new());
@@ -303,12 +342,22 @@ impl Graph {
         let seed_set: HashSet<String> = seeds.iter().cloned().collect();
         let mut sorted_seeds = seeds.clone();
         sorted_seeds.sort_by(|a, b| {
-            rank.get(b).unwrap_or(&0.0).partial_cmp(rank.get(a).unwrap_or(&0.0)).unwrap_or(std::cmp::Ordering::Equal)
+            rank.get(b)
+                .unwrap_or(&0.0)
+                .partial_cmp(rank.get(a).unwrap_or(&0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let mut rest: Vec<String> = rank.keys().filter(|k| !seed_set.contains(*k)).cloned().collect();
+        let mut rest: Vec<String> = rank
+            .keys()
+            .filter(|k| !seed_set.contains(*k))
+            .cloned()
+            .collect();
         rest.sort_by(|a, b| {
-            rank.get(b).unwrap_or(&0.0).partial_cmp(rank.get(a).unwrap_or(&0.0)).unwrap_or(std::cmp::Ordering::Equal)
+            rank.get(b)
+                .unwrap_or(&0.0)
+                .partial_cmp(rank.get(a).unwrap_or(&0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let mut top = sorted_seeds;
@@ -319,7 +368,7 @@ impl Graph {
         let mut edges = Vec::new();
         for s in &top {
             if let Some(out_map) = self.out_adj.get(s) {
-                for (t, &(_, ref rel)) in out_map {
+                for (t, (_, rel)) in out_map {
                     if keep.contains(t) {
                         edges.push((s.clone(), rel.clone(), t.clone()));
                     }
@@ -393,7 +442,10 @@ pub fn repo_dir(repo: &str) -> Option<PathBuf> {
     if path.is_dir() {
         if let Ok(resolved) = path.canonicalize() {
             for root in &roots {
-                if &resolved != root && is_relative_to(&resolved, root) && resolved.join("graphify-out").is_dir() {
+                if &resolved != root
+                    && is_relative_to(&resolved, root)
+                    && resolved.join("graphify-out").is_dir()
+                {
                     return Some(resolved);
                 }
             }
@@ -425,7 +477,7 @@ pub fn repo_dir(repo: &str) -> Option<PathBuf> {
 
 pub fn fmt_node(n: &Node, seed: bool) -> String {
     let loc = n.source_location.as_deref().unwrap_or("");
-    let loc_clean = if loc.starts_with('L') { &loc[1..] } else { loc };
+    let loc_clean = loc.strip_prefix('L').unwrap_or(loc);
     let file = n.source_file.as_deref().unwrap_or("");
     let where_str = if !file.is_empty() && !loc_clean.is_empty() {
         format!("{}:{}", file, loc_clean)
@@ -482,6 +534,8 @@ mod tests {
         assert!(ranked[0].2); // is_seed
 
         // Directed edge: func_a -calls-> func_b
-        assert!(edges.iter().any(|(s, r, t)| s == "func_a" && r == "calls" && t == "func_b"));
+        assert!(edges
+            .iter()
+            .any(|(s, r, t)| s == "func_a" && r == "calls" && t == "func_b"));
     }
 }

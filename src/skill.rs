@@ -21,17 +21,130 @@ pub struct MatchResult {
 }
 
 pub const STOP_WORDS: &[&str] = &[
-    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
-    "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
-    "by", "can", "did", "do", "does", "doing", "don", "down", "during", "each", "few", "for",
-    "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself",
-    "him", "himself", "his", "how", "if", "in", "into", "is", "it", "its", "itself", "just",
-    "me", "more", "most", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once",
-    "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she",
-    "should", "so", "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves",
-    "then", "there", "these", "they", "this", "those", "through", "to", "too", "under", "until",
-    "up", "very", "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom",
-    "why", "with", "you", "your", "yours", "yourself", "yourselves", "due",
+    "a",
+    "about",
+    "above",
+    "after",
+    "again",
+    "against",
+    "all",
+    "am",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "because",
+    "been",
+    "before",
+    "being",
+    "below",
+    "between",
+    "both",
+    "but",
+    "by",
+    "can",
+    "did",
+    "do",
+    "does",
+    "doing",
+    "don",
+    "down",
+    "during",
+    "each",
+    "few",
+    "for",
+    "from",
+    "further",
+    "had",
+    "has",
+    "have",
+    "having",
+    "he",
+    "her",
+    "here",
+    "hers",
+    "herself",
+    "him",
+    "himself",
+    "his",
+    "how",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "itself",
+    "just",
+    "me",
+    "more",
+    "most",
+    "my",
+    "myself",
+    "no",
+    "nor",
+    "not",
+    "now",
+    "of",
+    "off",
+    "on",
+    "once",
+    "only",
+    "or",
+    "other",
+    "our",
+    "ours",
+    "ourselves",
+    "out",
+    "over",
+    "own",
+    "same",
+    "she",
+    "should",
+    "so",
+    "some",
+    "such",
+    "than",
+    "that",
+    "the",
+    "their",
+    "theirs",
+    "them",
+    "themselves",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "through",
+    "to",
+    "too",
+    "under",
+    "until",
+    "up",
+    "very",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "who",
+    "whom",
+    "why",
+    "with",
+    "you",
+    "your",
+    "yours",
+    "yourself",
+    "yourselves",
+    "due",
 ];
 
 pub fn tokenize(text: &str) -> HashSet<String> {
@@ -52,11 +165,7 @@ pub fn parse_skill_md(file_path: &Path, root_type: &str) -> Option<SkillMeta> {
     };
 
     // Strip BOM
-    let clean = if content.starts_with('\u{feff}') {
-        &content[3..]
-    } else {
-        &content
-    };
+    let clean = content.strip_prefix('\u{feff}').unwrap_or(&content);
 
     let mut name = file_path
         .parent()
@@ -86,7 +195,14 @@ pub fn parse_skill_md(file_path: &Path, root_type: &str) -> Option<SkillMeta> {
             }
             if in_triggers {
                 if trimmed.starts_with('-') {
-                    triggers.push(trimmed.trim_start_matches('-').trim().trim_matches('\'').trim_matches('"').to_string());
+                    triggers.push(
+                        trimmed
+                            .trim_start_matches('-')
+                            .trim()
+                            .trim_matches('\'')
+                            .trim_matches('"')
+                            .to_string(),
+                    );
                     continue;
                 } else {
                     in_triggers = false;
@@ -120,7 +236,16 @@ pub fn parse_skill_md(file_path: &Path, root_type: &str) -> Option<SkillMeta> {
     if description.is_empty() {
         for &line in &lines {
             let s = line.trim();
-            if s.starts_with("# ") && name == file_path.parent().unwrap().file_name().unwrap().to_str().unwrap() {
+            if s.starts_with("# ")
+                && name
+                    == file_path
+                        .parent()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+            {
                 name = s.trim_start_matches("# ").trim().to_string();
             } else if !s.is_empty() && !s.starts_with('#') && description.is_empty() {
                 description = s.chars().take(300).collect();
@@ -179,7 +304,9 @@ pub fn discover_skill_roots(custom_roots: Option<&[PathBuf]>) -> Vec<(PathBuf, S
     }
 
     // 2. User global roots
-    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok();
     if let Some(h_str) = home {
         let h = PathBuf::from(h_str);
         // Antigravity / Gemini
@@ -187,7 +314,11 @@ pub fn discover_skill_roots(custom_roots: Option<&[PathBuf]>) -> Vec<(PathBuf, S
         if g_cfg.is_dir() {
             roots.push((g_cfg, "antigravity".to_string()));
         }
-        let g_builtin = h.join(".gemini").join("antigravity").join("builtin").join("skills");
+        let g_builtin = h
+            .join(".gemini")
+            .join("antigravity")
+            .join("builtin")
+            .join("skills");
         if g_builtin.is_dir() {
             roots.push((g_builtin, "antigravity".to_string()));
         }
@@ -252,7 +383,13 @@ pub fn scan_skills(roots: Option<&[(PathBuf, String)]>) -> Vec<SkillMeta> {
                             }
                         }
                     }
-                } else if path.is_file() && path.file_name().and_then(|n| n.to_str()).map(|s| s.to_lowercase()) == Some("skill.md".to_string()) {
+                } else if path.is_file()
+                    && path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|s| s.to_lowercase())
+                        == Some("skill.md".to_string())
+                {
                     if let Some(meta) = parse_skill_md(&path, root_type) {
                         if seen_names.insert(meta.name.clone()) {
                             skills.push(meta);
@@ -271,7 +408,11 @@ pub fn match_token(a: &str, b: &str) -> bool {
         return true;
     }
     if a.len() >= 4 && b.len() >= 4 {
-        let prefix_len = a.chars().zip(b.chars()).take_while(|(ca, cb)| ca == cb).count();
+        let prefix_len = a
+            .chars()
+            .zip(b.chars())
+            .take_while(|(ca, cb)| ca == cb)
+            .count();
         if prefix_len >= 4 {
             return true;
         }
@@ -297,10 +438,14 @@ pub fn score_skill(task: &str, skill: &SkillMeta) -> f64 {
         }
         let trig_toks = tokenize(&t_low);
         if !trig_toks.is_empty() {
-            let overlap = trig_toks.iter().filter(|tt| {
-                task_toks.iter().any(|t| match_token(tt, t))
-            }).count();
-            if trig_toks.is_subset(&task_toks) || overlap == trig_toks.len() || (trig_toks.len() >= 4 && overlap >= trig_toks.len() - 1) {
+            let overlap = trig_toks
+                .iter()
+                .filter(|tt| task_toks.iter().any(|t| match_token(tt, t)))
+                .count();
+            if trig_toks.is_subset(&task_toks)
+                || overlap == trig_toks.len()
+                || (trig_toks.len() >= 4 && overlap >= trig_toks.len() - 1)
+            {
                 trigger_hit = true;
                 break;
             }
@@ -309,9 +454,10 @@ pub fn score_skill(task: &str, skill: &SkillMeta) -> f64 {
 
     let name_toks = tokenize(&skill.name);
     let name_overlap = if !name_toks.is_empty() {
-        let hits = name_toks.iter().filter(|n| {
-            task_toks.iter().any(|t| match_token(n, t))
-        }).count();
+        let hits = name_toks
+            .iter()
+            .filter(|n| task_toks.iter().any(|t| match_token(n, t)))
+            .count();
         hits as f64 / name_toks.len() as f64
     } else {
         0.0
@@ -319,9 +465,10 @@ pub fn score_skill(task: &str, skill: &SkillMeta) -> f64 {
 
     let desc_toks = tokenize(&skill.description);
     let desc_overlap = if !desc_toks.is_empty() {
-        let hits = desc_toks.iter().filter(|d| {
-            task_toks.iter().any(|t| match_token(d, t))
-        }).count();
+        let hits = desc_toks
+            .iter()
+            .filter(|d| task_toks.iter().any(|t| match_token(d, t)))
+            .count();
         hits as f64 / desc_toks.len() as f64
     } else {
         0.0
@@ -405,20 +552,25 @@ pub fn find_remote_skills(query: &str) -> Vec<RemoteSkillCandidate> {
     let npx_bin = match find_npx() {
         Some(b) => b,
         None => {
-            eprintln!("find_remote_skills: diagnostic: npx not found on PATH; remote discovery skipped");
+            eprintln!(
+                "find_remote_skills: diagnostic: npx not found on PATH; remote discovery skipped"
+            );
             return Vec::new();
         }
     };
 
     let mut child = match std::process::Command::new(npx_bin)
-        .args(&["--yes", "skills", "find", query, "--json"])
+        .args(["--yes", "skills", "find", query, "--json"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("find_remote_skills: diagnostic: remote query failed ({}); falling back cleanly", e);
+            eprintln!(
+                "find_remote_skills: diagnostic: remote query failed ({}); falling back cleanly",
+                e
+            );
             return Vec::new();
         }
     };
@@ -460,11 +612,26 @@ pub fn find_remote_skills(query: &str) -> Vec<RemoteSkillCandidate> {
                         if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
                             candidates.push(RemoteSkillCandidate {
                                 package_name: name.to_string(),
-                                description: item.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string(),
-                                author: item.get("author").and_then(|a| a.as_str()).unwrap_or("").to_string(),
+                                description: item
+                                    .get("description")
+                                    .and_then(|d| d.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                author: item
+                                    .get("author")
+                                    .and_then(|a| a.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
                                 stars: item.get("stars").and_then(|s| s.as_u64()).unwrap_or(0),
-                                downloads: item.get("downloads").and_then(|d| d.as_u64()).unwrap_or(0),
-                                source_url: item.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
+                                downloads: item
+                                    .get("downloads")
+                                    .and_then(|d| d.as_u64())
+                                    .unwrap_or(0),
+                                source_url: item
+                                    .get("url")
+                                    .and_then(|u| u.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
                             });
                         }
                     }
@@ -485,7 +652,10 @@ pub fn install_skill(
     let dest_dir = if let Some(td) = target_dir {
         td.to_path_buf()
     } else {
-        let slug = package_name.trim().trim_start_matches('@').replace('/', "-");
+        let slug = package_name
+            .trim()
+            .trim_start_matches('@')
+            .replace('/', "-");
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         cwd.join(".agent").join("skills").join(slug)
     };
@@ -513,7 +683,14 @@ pub fn install_skill(
     }
 
     let mut child = match std::process::Command::new(npx_bin)
-        .args(&["--yes", "skills", "add", package_name, "--dest", &staging_dir.display().to_string()])
+        .args([
+            "--yes",
+            "skills",
+            "add",
+            package_name,
+            "--dest",
+            &staging_dir.display().to_string(),
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -547,7 +724,10 @@ pub fn install_skill(
 
     if let Some(s) = status {
         if !s.success() {
-            let stderr = child.wait_with_output().map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_default();
+            let stderr = child
+                .wait_with_output()
+                .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                .unwrap_or_default();
             let _ = fs::remove_dir_all(&staging_base);
             return Err(format!("skills add failed: {}", stderr.trim()));
         }
@@ -559,7 +739,10 @@ pub fn install_skill(
     let (is_safe, reason) = audit_skill_safety(&staging_dir);
     if !is_safe {
         let _ = fs::remove_dir_all(&staging_base);
-        return Err(format!("Security audit failed: {}", reason.unwrap_or_default()));
+        return Err(format!(
+            "Security audit failed: {}",
+            reason.unwrap_or_default()
+        ));
     }
 
     // Staging and audit passed; copy files into dest_dir safely
@@ -595,7 +778,10 @@ pub fn install_skill(
                 let mut hasher = Sha256::new();
                 hasher.update(&bytes);
                 let hash_hex = format!("{:x}", hasher.finalize());
-                let rel = p.strip_prefix(&dest_dir).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                let rel = p
+                    .strip_prefix(&dest_dir)
+                    .map(|r| r.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
                 file_entries.push(serde_json::json!({
                     "path": rel,
                     "sha256": hash_hex
@@ -609,7 +795,10 @@ pub fn install_skill(
         "installed_at": chrono::Utc::now().to_rfc3339(),
         "files": file_entries
     });
-    let _ = fs::write(dest_dir.join(".skill-lock.json"), serde_json::to_string_pretty(&lock_data).unwrap_or_default());
+    let _ = fs::write(
+        dest_dir.join(".skill-lock.json"),
+        serde_json::to_string_pretty(&lock_data).unwrap_or_default(),
+    );
 
     Ok(dest_dir)
 }
@@ -620,7 +809,8 @@ pub fn audit_skill_safety(dir_or_file: &Path) -> (bool, Option<String>) {
     let re_curl_sh = Regex::new(r"(?i)(?:curl|wget)\s+.*\|\s*(?:ba)?sh\b").unwrap();
     let re_ps = Regex::new(r"(?i)powershell(?:\.exe)?\s+.*(?:-enc|-encodedcommand|invoke-expression|iex)\b|Invoke-Expression\b").unwrap();
     let re_env = Regex::new(r"(?i)\b(?:printenv|Get-ChildItem\s+env:)\b").unwrap();
-    let re_rev_shell = Regex::new(r"(?i)/dev/tcp/\d+\.\d+\.\d+\.\d+|\b(?:nc|ncat|netcat)\s+-[e|c]\b").unwrap();
+    let re_rev_shell =
+        Regex::new(r"(?i)/dev/tcp/\d+\.\d+\.\d+\.\d+|\b(?:nc|ncat|netcat)\s+-[e|c]\b").unwrap();
     let re_injection = Regex::new(r"(?i)\b(?:ignore|disregard|override)\s+(?:all\s+)?(?:previous|prior)\s+(?:instructions|prompts|rules)\b|\b(?:system\s+prompt\s*:|jailbreak|you\s+are\s+now\s+in\s+developer\s+mode)\b").unwrap();
 
     let is_trojan_char = |c: char| -> bool {
@@ -638,8 +828,16 @@ pub fn audit_skill_safety(dir_or_file: &Path) -> (bool, Option<String>) {
     } else if dir_or_file.is_dir() {
         for entry in walkdir::WalkDir::new(dir_or_file).into_iter().flatten() {
             if entry.file_type().is_file() {
-                let ext = entry.path().extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                if matches!(ext.as_str(), "md" | "py" | "sh" | "bash" | "js" | "ts" | "ps1") {
+                let ext = entry
+                    .path()
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if matches!(
+                    ext.as_str(),
+                    "md" | "py" | "sh" | "bash" | "js" | "ts" | "ps1"
+                ) {
                     paths.push(entry.path().to_path_buf());
                 }
             }
@@ -650,10 +848,23 @@ pub fn audit_skill_safety(dir_or_file: &Path) -> (bool, Option<String>) {
         if let Ok(content) = fs::read_to_string(&p) {
             for (i, c) in content.char_indices() {
                 if is_trojan_char(c) {
-                    return (false, Some(format!("Invisible/Trojan Source character U+{:04X} detected in {}", c as u32, p.display())));
+                    return (
+                        false,
+                        Some(format!(
+                            "Invisible/Trojan Source character U+{:04X} detected in {}",
+                            c as u32,
+                            p.display()
+                        )),
+                    );
                 }
                 if c == '\u{feff}' && i > 0 {
-                    return (false, Some(format!("Hidden zero-width BOM character detected inside text in {}", p.display())));
+                    return (
+                        false,
+                        Some(format!(
+                            "Hidden zero-width BOM character detected inside text in {}",
+                            p.display()
+                        )),
+                    );
                 }
             }
 
@@ -665,7 +876,10 @@ pub fn audit_skill_safety(dir_or_file: &Path) -> (bool, Option<String>) {
                 || re_rev_shell.is_match(&content)
                 || re_injection.is_match(&content)
             {
-                return (false, Some(format!("Dangerous pattern matched in {}", p.display())));
+                return (
+                    false,
+                    Some(format!("Dangerous pattern matched in {}", p.display())),
+                );
             }
         }
     }
@@ -685,7 +899,10 @@ pub fn load_skill_context(file_path: &Path) -> String {
     };
 
     if !cand.is_file() {
-        return format!("> [!WARNING] Skill instruction file not found: {}", cand.display());
+        return format!(
+            "> [!WARNING] Skill instruction file not found: {}",
+            cand.display()
+        );
     }
 
     let text = match fs::read_to_string(&cand) {

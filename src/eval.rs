@@ -14,8 +14,8 @@ pub fn run_eval(idx: &mut Index, golden_path: &Path, k: usize) -> Result<String,
     let content = fs::read_to_string(golden_path)
         .map_err(|e| format!("failed reading {}: {}", golden_path.display(), e))?;
 
-    let cases: Vec<EvalCase> = serde_json::from_str(&content)
-        .map_err(|e| format!("invalid golden eval json: {}", e))?;
+    let cases: Vec<EvalCase> =
+        serde_json::from_str(&content).map_err(|e| format!("invalid golden eval json: {}", e))?;
 
     let mut found = 0usize;
     let mut rr = 0.0f64;
@@ -47,7 +47,10 @@ pub fn run_eval(idx: &mut Index, golden_path: &Path, k: usize) -> Result<String,
     let recall = (found as f64) / n_f64;
     let mrr = rr / n_f64;
 
-    let mut lines = vec![format!("Recall@{} {}/{} = {:.2}   MRR {:.3}", k, found, n, recall, mrr)];
+    let mut lines = vec![format!(
+        "Recall@{} {}/{} = {:.2}   MRR {:.3}",
+        k, found, n, recall, mrr
+    )];
     lines.extend(misses);
 
     Ok(lines.join("\n"))

@@ -4,17 +4,129 @@ use std::fs;
 use std::path::Path;
 
 const STOPWORDS: &[&str] = &[
-    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
-    "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
-    "by", "could", "did", "do", "does", "doing", "down", "during", "each", "few", "for", "from",
-    "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself", "him",
-    "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "me", "more",
-    "most", "my", "myself", "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other",
-    "ought", "our", "ours", "ourselves", "out", "over", "own", "same", "she", "should", "so",
-    "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then",
-    "there", "these", "they", "this", "those", "through", "to", "too", "under", "until", "up",
-    "very", "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why",
-    "with", "would", "you", "your", "yours", "yourself", "yourselves",
+    "a",
+    "about",
+    "above",
+    "after",
+    "again",
+    "against",
+    "all",
+    "am",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "because",
+    "been",
+    "before",
+    "being",
+    "below",
+    "between",
+    "both",
+    "but",
+    "by",
+    "could",
+    "did",
+    "do",
+    "does",
+    "doing",
+    "down",
+    "during",
+    "each",
+    "few",
+    "for",
+    "from",
+    "further",
+    "had",
+    "has",
+    "have",
+    "having",
+    "he",
+    "her",
+    "here",
+    "hers",
+    "herself",
+    "him",
+    "himself",
+    "his",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "itself",
+    "me",
+    "more",
+    "most",
+    "my",
+    "myself",
+    "no",
+    "nor",
+    "not",
+    "of",
+    "off",
+    "on",
+    "once",
+    "only",
+    "or",
+    "other",
+    "ought",
+    "our",
+    "ours",
+    "ourselves",
+    "out",
+    "over",
+    "own",
+    "same",
+    "she",
+    "should",
+    "so",
+    "some",
+    "such",
+    "than",
+    "that",
+    "the",
+    "their",
+    "theirs",
+    "them",
+    "themselves",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "through",
+    "to",
+    "too",
+    "under",
+    "until",
+    "up",
+    "very",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "who",
+    "whom",
+    "why",
+    "with",
+    "would",
+    "you",
+    "your",
+    "yours",
+    "yourself",
+    "yourselves",
 ];
 
 pub fn tokenize(text: &str) -> HashSet<String> {
@@ -164,7 +276,10 @@ pub struct MineResult {
     pub proposals: Vec<MineProposal>,
 }
 
-pub fn scan_ledger_gaps(ledger_path: &Path, project: Option<&str>) -> Vec<(String, crate::ledger::LedgerEntry)> {
+pub fn scan_ledger_gaps(
+    ledger_path: &Path,
+    project: Option<&str>,
+) -> Vec<(String, crate::ledger::LedgerEntry)> {
     let entries = crate::ledger::read_ledger(ledger_path, None, project);
     let mut gaps = Vec::new();
     for e in entries {
@@ -177,9 +292,7 @@ pub fn scan_ledger_gaps(ledger_path: &Path, project: Option<&str>) -> Vec<(Strin
         if q.is_empty() {
             continue;
         }
-        if e.event == "query" && e.hits.is_empty() {
-            gaps.push((q, e));
-        } else if e.event == "skill" && e.hits.is_empty() {
+        if (e.event == "query" || e.event == "skill") && e.hits.is_empty() {
             gaps.push((q, e));
         }
     }
@@ -220,7 +333,10 @@ pub fn mine_gaps(
     let clusters = cluster_gaps(gaps);
     let total_clusters = clusters.len();
 
-    let qualified: Vec<&GapCluster> = clusters.iter().filter(|c| c.queries.len() >= min_count).collect();
+    let qualified: Vec<&GapCluster> = clusters
+        .iter()
+        .filter(|c| c.queries.len() >= min_count)
+        .collect();
     let inbox_dir = vault_path.join("inbox");
     if !dry_run && !qualified.is_empty() {
         fs::create_dir_all(&inbox_dir).map_err(|e| e.to_string())?;

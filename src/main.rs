@@ -12,7 +12,11 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "hive", version, about = "High-performance shared memory for AI coding agents")]
+#[command(
+    name = "hive",
+    version,
+    about = "High-performance shared memory for AI coding agents"
+)]
 struct Cli {
     #[arg(long, global = true)]
     vault: Option<PathBuf>,
@@ -138,10 +142,7 @@ enum AceCommands {
         ops_file: Option<PathBuf>,
     },
     /// Show bullets that hive_context would inject
-    Show {
-        scope: String,
-        task: Option<String>,
-    },
+    Show { scope: String, task: Option<String> },
     /// SessionStart hook
     HookStart {
         #[arg(default_value = "global")]
@@ -164,23 +165,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let cli = Cli::parse();
         let cfg = load_config(cli.vault, cli.projects, cli.db, cli.config.as_deref());
-        match cli.command.unwrap_or(Commands::Serve { vault: None, db: None }) {
+        match cli.command.unwrap_or(Commands::Serve {
+            vault: None,
+            db: None,
+        }) {
             Commands::Serve { vault, db } => {
                 serve(vault.or(Some(cfg.vault)), db.or(Some(cfg.db)))?;
             }
-            Commands::Search { query, project, scope, limit } => {
+            Commands::Search {
+                query,
+                project,
+                scope,
+                limit,
+            } => {
                 let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 let proj = project.as_deref().unwrap_or("");
                 let t0 = std::time::Instant::now();
                 let hits = idx.search(&query, proj, limit, &scope)?;
                 let duration_ms = t0.elapsed().as_secs_f64() * 1000.0;
                 let hit_paths: Vec<String> = hits.iter().map(|h| h.path.clone()).collect();
-                ai_hive::ledger::record(&cfg.ledger, "query", proj, &query, &hit_paths, &[], duration_ms, None, None);
+                ai_hive::ledger::record(
+                    &cfg.ledger,
+                    "query",
+                    proj,
+                    &query,
+                    &hit_paths,
+                    &[],
+                    duration_ms,
+                    None,
+                    None,
+                );
                 if hits.is_empty() {
                     println!("no matching notes");
                 } else {
                     for h in hits {
-                        println!("- {} ({}, {}, {}) {}\n  {}", h.path, h.r#type, h.status, h.updated, h.title, h.snippet);
+                        println!(
+                            "- {} ({}, {}, {}) {}\n  {}",
+                            h.path, h.r#type, h.status, h.updated, h.title, h.snippet
+                        );
                     }
                 }
             }
@@ -189,7 +211,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let res = tool_graph(&mut idx, &repo, &query, limit)?;
                 println!("{}", res);
             }
-            Commands::Context { project, task, budget } => {
+            Commands::Context {
+                project,
+                task,
+                budget,
+            } => {
                 let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 let t = task.as_deref().unwrap_or("");
                 let res = tool_context(&mut idx, &project, t, budget)?;
@@ -198,8 +224,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Commands::Status => {
                 let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 idx.refresh(true)?;
-                let total: i64 = idx.conn.query_row("SELECT count(*) FROM notes", [], |r| r.get(0)).unwrap_or(0);
-                println!("vault {}: {} notes indexed ({})", idx.vault.display(), total, default_db_path().display());
+                let total: i64 = idx
+                    .conn
+                    .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+                    .unwrap_or(0);
+                println!(
+                    "vault {}: {} notes indexed ({})",
+                    idx.vault.display(),
+                    total,
+                    default_db_path().display()
+                );
             }
             Commands::Lint { vault, staged } => {
                 let v = vault.unwrap_or_else(|| cfg.vault.clone());
@@ -226,9 +260,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let res = run_bench(&mut idx)?;
                 println!("{}", res);
             }
-            Commands::Ledger { command, tail, project } => {
+            Commands::Ledger {
+                command,
+                tail,
+                project,
+            } => {
                 match command {
-                    Some(LedgerCommands::Score { session, exit_code, project, repo }) => {
+                    Some(LedgerCommands::Score {
+                        session,
+                        exit_code,
+                        project,
+                        repo,
+                    }) => {
                         let res = ai_hive::ledger::score_session(
                             &cfg.ledger,
                             &cfg.vault,
@@ -243,11 +286,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 res.session_id, res.reward, res.test_exit_code, res.bullets.len(), res.skills.len(), res.changes
                             );
                         } else {
-                            println!("ledger score: session not scored (session={})", res.session_id);
+                            println!(
+                                "ledger score: session not scored (session={})",
+                                res.session_id
+                            );
                         }
                     }
                     None => {
-                        let entries = ai_hive::ledger::read_ledger(&cfg.ledger, tail, project.as_deref());
+                        let entries =
+                            ai_hive::ledger::read_ledger(&cfg.ledger, tail, project.as_deref());
                         if entries.is_empty() {
                             println!("ledger: no entries in {}", cfg.ledger.display());
                         } else {
@@ -261,7 +308,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            Commands::Skill { task, auto_install, scope } => {
+            Commands::Skill {
+                task,
+                auto_install,
+                scope,
+            } => {
                 let res = ai_hive::mcp::tool_skill(&task, auto_install, &scope)?;
                 println!("{}", res);
             }
@@ -276,7 +327,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("=== [2/2] Running Rust test suite ===");
                 let status = std::process::Command::new("cargo")
-                    .args(&["test", "--quiet"])
+                    .args(["test", "--quiet"])
                     .status();
                 match status {
                     Ok(s) if s.success() => {
@@ -295,7 +346,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     res.total_gaps, res.total_clusters, res.proposals_generated, res.dry_run
                 );
                 for p in res.proposals {
-                    println!("  proposal: [{}] \"{}\" (count={}) -> {}", p.hash, p.representative, p.count, p.file);
+                    println!(
+                        "  proposal: [{}] \"{}\" (count={}) -> {}",
+                        p.hash, p.representative, p.count, p.file
+                    );
                 }
             }
             Commands::Curate { project, dry_run } => {
@@ -304,7 +358,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &cfg.vault,
                     project.as_deref(),
                     dry_run,
-                    None,
+                    cli.config.as_deref(),
                 )?;
                 if res.skipped {
                     println!("curate: {} ({})", res.model, res.reason.unwrap_or_default());
@@ -342,15 +396,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     AceCommands::HookStart { scope } => {
                         let sections = load(&vault, &scope)?;
                         let bullets = select_bullets(&sections, "", 8);
-                        let bullet_ids: Vec<String> = bullets.iter().map(|b| b.id.clone()).collect();
-                        ai_hive::ledger::record(&cfg.ledger, "inject", &scope, "hook-start", &[], &bullet_ids, 0.0, None, None);
+                        let bullet_ids: Vec<String> =
+                            bullets.iter().map(|b| b.id.clone()).collect();
+                        ai_hive::ledger::record(
+                            &cfg.ledger,
+                            "inject",
+                            &scope,
+                            "hook-start",
+                            &[],
+                            &bullet_ids,
+                            0.0,
+                            None,
+                            None,
+                        );
                         if !bullets.is_empty() {
                             println!("[ACE Playbook ({})]\n{}", scope, format_bullets(&bullets));
                         }
                     }
                     AceCommands::HookStop { scope, diff } => {
-                        ai_hive::ledger::record(&cfg.ledger, "reflect", &scope, "hook-stop", &[], &[], 0.0, None, None);
-                        println!("ace: stop hook triggered for scope '{}' (diff={})", scope, diff);
+                        ai_hive::ledger::record(
+                            &cfg.ledger,
+                            "reflect",
+                            &scope,
+                            "hook-stop",
+                            &[],
+                            &[],
+                            0.0,
+                            None,
+                            None,
+                        );
+                        println!(
+                            "ace: stop hook triggered for scope '{}' (diff={})",
+                            scope, diff
+                        );
                     }
                 }
             }

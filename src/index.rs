@@ -13,17 +13,24 @@ pub const TYPE_PRIOR: &[(&str, f64)] = &[
     ("journal", 0.8),
 ];
 
-pub const STATUS_PRIOR: &[(&str, f64)] = &[
-    ("superseded", 0.3),
-    ("archived", 0.4),
-];
+pub const STATUS_PRIOR: &[(&str, f64)] = &[("superseded", 0.3), ("archived", 0.4)];
 
 pub const PROJECT_BOOST: f64 = 2.0;
 pub const AUTOCUT_RATIO: f64 = 0.30;
 pub const REFRESH_EVERY_S: f64 = 2.0;
 pub const SKIP_DIRS: &[&str] = &[
-    ".git", ".obsidian", ".claude", ".agents", ".trash", "Python",
-    "_attachments", "graph", "node_modules", "templates", "_template", ".claude-flow",
+    ".git",
+    ".obsidian",
+    ".claude",
+    ".agents",
+    ".trash",
+    "Python",
+    "_attachments",
+    "graph",
+    "node_modules",
+    "templates",
+    "_template",
+    ".claude-flow",
 ];
 
 pub fn type_prior(t: &str) -> f64 {
@@ -54,19 +61,23 @@ pub fn parse_note(text: &str) -> (HashMap<String, String>, String, String) {
     let mut meta = HashMap::new();
     let mut body = clean;
 
-    if clean.starts_with("---") {
-        if let Some(end) = clean[3..].find("\n---") {
-            let front = &clean[3..3 + end];
+    if let Some(after) = clean.strip_prefix("---") {
+        if let Some(end) = after.find("\n---") {
+            let front = &after[..end];
             for line in front.lines() {
                 if let Some((k, v)) = line.split_once(':') {
                     let key = k.trim();
-                    if !key.is_empty() && !key.starts_with(' ') && !key.starts_with('\t') && !key.starts_with('-') {
+                    if !key.is_empty()
+                        && !key.starts_with(' ')
+                        && !key.starts_with('\t')
+                        && !key.starts_with('-')
+                    {
                         let val = v.trim().trim_matches('\'').trim_matches('"');
                         meta.insert(key.to_string(), val.to_string());
                     }
                 }
             }
-            body = clean[3 + end + 4..].trim_start_matches(|c| c == '-' || c == '\n' || c == '\r');
+            body = after[end + 4..].trim_start_matches(['-', '\n', '\r']);
         }
     }
 
@@ -108,7 +119,8 @@ impl Index {
         }
 
         let conn = Connection::open(&db).map_err(|e| e.to_string())?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA timeout=10000;").map_err(|e| e.to_string())?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA timeout=10000;")
+            .map_err(|e| e.to_string())?;
 
         let user_version: i32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -276,8 +288,14 @@ impl Index {
                 String::new()
             };
 
-            let ntype = meta.get("type").cloned().unwrap_or_else(|| "note".to_string());
-            let status = meta.get("status").cloned().unwrap_or_else(|| "active".to_string());
+            let ntype = meta
+                .get("type")
+                .cloned()
+                .unwrap_or_else(|| "note".to_string());
+            let status = meta
+                .get("status")
+                .cloned()
+                .unwrap_or_else(|| "active".to_string());
             let agent = meta.get("agent").cloned().unwrap_or_default();
             let updated = meta.get("updated").cloned().unwrap_or_default();
             let source = meta.get("source").cloned().unwrap_or_default();
@@ -287,18 +305,24 @@ impl Index {
 
             tx.execute(
                 "INSERT OR REPLACE INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                params![&rel, mtime, size, &hash, &project, &ntype, &status, &agent, &updated, &source, &title],
-            ).map_err(|e| e.to_string())?;
+                params![
+                    &rel, mtime, size, &hash, &project, &ntype, &status, &agent, &updated, &source,
+                    &title
+                ],
+            )
+            .map_err(|e| e.to_string())?;
 
-            let rel_words: Vec<&str> = rel.trim_end_matches(".md")
-                .split(|c| c == '/' || c == '_' || c == '.' || c == '-')
+            let rel_words: Vec<&str> = rel
+                .trim_end_matches(".md")
+                .split(['/', '_', '.', '-'])
                 .collect();
             let meta_text = format!("{} {} {}", project, ntype, rel_words.join(" "));
 
             tx.execute(
                 "INSERT INTO notes_fts VALUES(?,?,?,?)",
                 params![&rel, &title, &meta_text, &body],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
 
             changed += 1;
         }
@@ -350,20 +374,22 @@ impl Index {
                  WHERE notes_fts MATCH ? AND n.project IN (?, '', 'global') ORDER BY s DESC LIMIT ?"
             ).map_err(|e| e.to_string())?;
 
-            let rows = stmt.query_map(params![match_expr, project, fetch_limit as i64], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, f64>(8)?,
-                    row.get::<_, String>(9)?,
-                ))
-            }).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![match_expr, project, fetch_limit as i64], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, f64>(8)?,
+                        row.get::<_, String>(9)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
 
             for r in rows.flatten() {
                 let (path, title, proj, ntype, status, updated, agent, source, mut score, snip) = r;
@@ -394,20 +420,22 @@ impl Index {
                  WHERE notes_fts MATCH ? ORDER BY s DESC LIMIT ?"
             ).map_err(|e| e.to_string())?;
 
-            let rows = stmt.query_map(params![match_expr, fetch_limit as i64], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, f64>(8)?,
-                    row.get::<_, String>(9)?,
-                ))
-            }).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![match_expr, fetch_limit as i64], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, f64>(8)?,
+                        row.get::<_, String>(9)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
 
             for r in rows.flatten() {
                 let (path, title, proj, ntype, status, updated, agent, source, mut score, snip) = r;
@@ -431,7 +459,11 @@ impl Index {
             }
         }
 
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         if !hits.is_empty() {
             let floor = AUTOCUT_RATIO * hits[0].score;
@@ -454,20 +486,26 @@ impl Index {
         fs::read_to_string(&full).unwrap_or_default()
     }
 
-    pub fn by_project(&mut self, project: &str, ntype: &str) -> Result<Vec<(String, String, String, String)>, String> {
+    pub fn by_project(
+        &mut self,
+        project: &str,
+        ntype: &str,
+    ) -> Result<Vec<(String, String, String, String)>, String> {
         let _ = self.refresh(false);
         let mut stmt = self.conn.prepare(
             "SELECT path, title, status, updated FROM notes WHERE project=? AND type=? ORDER BY path"
         ).map_err(|e| e.to_string())?;
 
-        let rows = stmt.query_map(params![project, ntype], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        }).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![project, ntype], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
 
         let mut out = Vec::new();
         for r in rows.flatten() {
@@ -485,7 +523,8 @@ mod tests {
     fn test_fts5_in_memory() {
         let temp_dir = std::env::temp_dir().join(format!("hive_test_{}", std::process::id()));
         let _ = fs::create_dir_all(&temp_dir);
-        let mut idx = Index::new(Some(temp_dir.clone()), Some(temp_dir.join("test.sqlite"))).unwrap();
+        let mut idx =
+            Index::new(Some(temp_dir.clone()), Some(temp_dir.join("test.sqlite"))).unwrap();
 
         let test_file = temp_dir.join("test.md");
         fs::write(&test_file, "---\ntype: note\nproject: proj\nstatus: active\nupdated: 2026-11-24\n---\n# Test Title\nContent about rust migration and fts5 search").unwrap();

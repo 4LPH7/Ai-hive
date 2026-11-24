@@ -10,18 +10,28 @@ pub fn run_bench(idx: &mut Index) -> Result<String, String> {
     // 1. Index refresh
     let t0 = Instant::now();
     let _ = idx.refresh(true)?;
-    lines.push(format!("index refresh: {:.1} ms", t0.elapsed().as_secs_f64() * 1000.0));
+    lines.push(format!(
+        "index refresh: {:.1} ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    ));
 
     // 2. Vault search
     let t0 = Instant::now();
     let _ = idx.search("price source deploy", "", 8, "project")?;
-    lines.push(format!("vault search: {:.1} ms", t0.elapsed().as_secs_f64() * 1000.0));
+    lines.push(format!(
+        "vault search: {:.1} ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    ));
 
     // 3. Graph benchmarks
     let projects = default_projects();
     if projects.is_dir() {
         if let Ok(entries) = fs::read_dir(&projects) {
-            let mut dirs: Vec<_> = entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+            let mut dirs: Vec<_> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect();
             dirs.sort();
 
             for d in dirs {
