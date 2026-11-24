@@ -63,8 +63,8 @@ Then register `python -I /path/to/ai-hive/hive.py serve` as an MCP server in eac
 | Tool | What it returns |
 |------|-----------------|
 | `hive_context(project, task?, budget=1500)` | Session-start pack: the project's active-work row, `_memory.md`, ADR list, top playbook lessons, and (with a task) matching notes and ranked code symbols, greedily packed to the token budget |
-| `hive_search(query, project?, limit=8)` | BM25 over every note; title weighted x5; ADRs and project memory boosted; superseded or archived notes demoted; weak tail cut |
-| `hive_graph(repo, query, limit=15)` | graphify code graph: identifier seeds, Personalized PageRank over the 2-hop neighbourhood with hub dampening; symbols with `file:line`, edges, related notes, staleness warning |
+| `hive_search(query, project, limit=8, scope="project")` | BM25 over the selected project's notes plus global notes by default; set `scope="global"` or explicit `scope="all"` for other search modes; title weighted x5; ADRs and project memory boosted; superseded or archived notes demoted; weak tail cut |
+| `hive_graph(repo, query, limit=15)` | graphify code graph: identifier seeds, directed Personalized PageRank over the 2-hop neighbourhood with stronger caller-to-callee traversal; symbols with `file:line`, source-to-target edges, related notes, staleness warning |
 | `hive_status()` | Notes per project, graph size and freshness per repo |
 | `hive_lint()` | Vault health against the vault manual's rules |
 
