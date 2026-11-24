@@ -1,3 +1,13 @@
+## 2026-11-24 — v1.1 correctness and security patch
+
+- **Security:** constrain project slugs, vault note reads and graph repository paths to their canonical roots; reject invalid MCP arguments and unknown fields.
+- **Isolation:** scope MCP search and task context to the selected project plus global memory by default; cross-project search now requires `scope="all"`.
+- **Context:** allocate separate memory, playbook, task-note and graph budgets so a long project memory cannot starve task context.
+- **Graph:** preserve source-to-target edge direction and bias graph diffusion toward forward relationships.
+- **Vault integrity:** parse UTF-8 BOM notes, match active-work project cells exactly, scan notes with ACE's shared secret detector, and make missing provenance on new agent notes an ERROR.
+- **Trust boundary:** label retrieved vault content as untrusted data with agent/source/update provenance.
+- **Git hooks:** pre-commit lint checks staged files while resolving references against the complete vault.
+
 # Changelog
 
 ## 2026-11-23 (later)
