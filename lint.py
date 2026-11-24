@@ -4,6 +4,7 @@
 """
 import os
 import re
+import subprocess
 import sys
 from collections import defaultdict
 from datetime import date
@@ -12,6 +13,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # `python -I` drops the script dir; hive.py sits beside us
 import hive  # noqa: E402
+import ace  # noqa: E402 — share the same secret detector used by ACE writes
 
 ALLOWED = {
     "type": {"project-memory", "adr", "journal", "note"},
@@ -104,7 +106,7 @@ def check_frontmatter(rel, meta, has_frontmatter):
     if (meta.get("type") in ("adr", "note") and meta.get("agent") != "user" and rel.startswith(SOURCED_PREFIXES)
             and Path(rel).stem not in CONVENTIONAL_NAMES  # playbooks are machine-merged by ace.py
             and updated >= SOURCE_RULE_FROM and not meta.get("source")):
-        out.append(Finding("WARN", "source-missing", rel, "agent-written note needs `source:` (commit, session, URL or file)"))
+        out.append(Finding("ERROR", "source-missing", rel, "agent-written note needs `source:` (commit, session, URL or file)"))
     return out
 
 
@@ -132,48 +134,89 @@ def check_size_and_age(rel, meta, text, today):
     return out
 
 
-def lint(vault=hive.VAULT, today=None):
-    vault = Path(vault)
+def lint(vault=hive.VAULT, today=None, only_paths=None):
+    """Lint all notes, or selected relative paths while resolving links against the full vault."""
+    vault = Path(vault).resolve()
     today = today or date.today().isoformat()
     files = list(walk(vault))
     notes = [f for f in files if f.endswith(".md") and not f.startswith("_attachments/")]
+    selected = set(notes) if only_paths is None else {
+        Path(path).as_posix() for path in only_paths if Path(path).as_posix() in notes
+    }
     resolver = Resolver(files)
     findings, inbound, outbound = [], defaultdict(set), {}
     for rel in notes:
-        text = (vault / rel).read_text(encoding="utf-8", errors="replace")
+        try:
+            text = (vault / rel).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError as exc:
+            if rel in selected:
+                findings.append(Finding("ERROR", "unreadable", rel, str(exc)))
+            continue
         meta, _, body = hive.parse_note(text)
-        findings += check_frontmatter(rel, meta, text.startswith("---"))
-        findings += check_size_and_age(rel, meta, text, today)
-        findings += check_journal(rel, body)
         outbound[rel] = set()
         for target in links_in(body):
-            hits = resolver.resolve(target)
-            if not hits:
-                findings.append(Finding("WARN", "broken-link", rel, f"[[{target}]] resolves to no note or file"))
-            for hit in hits:
+            for hit in resolver.resolve(target):
                 inbound[hit].add(rel)
                 outbound[rel].add(hit)
+        if rel not in selected:
+            continue
+        findings += check_frontmatter(rel, meta, text.lstrip("\ufeff").startswith("---"))
+        findings += check_size_and_age(rel, meta, text, today)
+        findings += check_journal(rel, body)
+        if ace.SECRET_RE.search(text):
+            findings.append(Finding("ERROR", "secret-detected", rel,
+                                    "possible credential or secret detected; remove it and rotate the credential"))
+        for target in links_in(body):
+            if not resolver.resolve(target):
+                findings.append(Finding("WARN", "broken-link", rel, f"[[{target}]] resolves to no note or file"))
         if meta.get("type") == "adr" and meta.get("status") == "superseded" and not (outbound[rel] - {rel}):
             findings.append(Finding("ERROR", "superseded-unlinked", rel, "superseded ADR must link its successor"))
-    findings += check_names(notes)
-    findings += check_orphans(notes, inbound)
+    findings += check_names(notes, selected)
+    findings += check_orphans(notes, inbound, selected)
     return findings
 
 
-def check_names(notes):
+def check_names(notes, selected=None):
     by_stem = defaultdict(list)
     for rel in notes:
         by_stem[Path(rel).stem.lower()].append(rel)
+    selected = set(notes) if selected is None else set(selected)
     return [Finding("WARN", "duplicate-name", rel, f"[[{stem}]] is ambiguous: {', '.join(paths)}")
             for stem, paths in by_stem.items() if len(paths) > 1 and stem not in CONVENTIONAL_NAMES
-            for rel in paths]
+            for rel in paths if rel in selected]
 
 
-def check_orphans(notes, inbound):
+def check_orphans(notes, inbound, selected=None):
     """Project notes nothing links to are invisible in Obsidian's graph; journal and inbox are unlinked by design."""
+    selected = set(notes) if selected is None else set(selected)
     return [Finding("INFO", "orphan", rel, "no note links here; link it from the project's _memory.md")
-            for rel in notes
-            if rel.startswith("projects/") and Path(rel).stem not in CONVENTIONAL_NAMES and not inbound[rel] - {rel}]
+            for rel in notes if rel in selected
+            and rel.startswith("projects/") and Path(rel).stem not in CONVENTIONAL_NAMES and not inbound[rel] - {rel}
+
+
+def staged_paths(vault):
+    """Return staged added/copied/modified/renamed paths relative to the vault root."""
+    result = subprocess.run(
+        ["git", "-C", str(Path(vault).resolve()), "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+    )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def main(argv):
+    args = list(argv)
+    staged = "--staged" in args
+    args = [arg for arg in args if arg != "--staged"]
+    vault = Path(args[0]) if args else hive.VAULT
+    try:
+        selected = staged_paths(vault) if staged else None
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"lint: could not enumerate staged files: {exc}", file=sys.stderr)
+        return 2
+    findings = lint(vault, only_paths=selected)
+    sys.stdout.reconfigure(encoding="utf-8")
+    print(format_report(findings))
+    return 1 if any(f.severity == "ERROR" for f in findings) else 0
 
 
 def format_report(findings):
