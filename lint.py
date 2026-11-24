@@ -2,6 +2,7 @@
 
     python lint.py [vault]      report; exit 1 if any ERROR
 """
+import json
 import os
 import re
 import sys
@@ -154,9 +155,60 @@ def git_staged_files(vault):
         return None
 
 
+def check_adr_staleness(rel, text, projects_root):
+    if not (rel.startswith("projects/") and "/adrs/" in rel):
+        return []
+    parts = rel.split("/")
+    if len(parts) < 3:
+        return []
+    slug = parts[1]
+    proj_dir = Path(projects_root) / slug
+    graphify_out = proj_dir / "graphify-out"
+    manifest_p = graphify_out / "manifest.json"
+    graph_p = graphify_out / "graph.json"
+
+    known_symbols = set()
+    deleted_symbols = set()
+    if manifest_p.is_file():
+        try:
+            m = json.loads(manifest_p.read_text(encoding="utf-8"))
+            known_symbols.update(m.get("symbols", []))
+            deleted_symbols.update(m.get("deleted_symbols", []))
+        except Exception:
+            pass
+    elif graph_p.is_file():
+        try:
+            g = json.loads(graph_p.read_text(encoding="utf-8"))
+            for node in g.get("nodes", []):
+                if node.get("name"):
+                    known_symbols.add(node["name"])
+                if node.get("label"):
+                    known_symbols.add(node["label"])
+        except Exception:
+            pass
+
+    if not known_symbols and not deleted_symbols:
+        return []
+
+    raw_symbols = re.findall(r"`([A-Za-z_][A-Za-z0-9_:]*)`", text)
+    findings = []
+    stopwords = {"true", "false", "null", "none", "str", "int", "dict", "bool", "json", "path", "self", "file"}
+    checked = set()
+    for sym in raw_symbols:
+        if sym.lower() in stopwords or len(sym) < 3 or sym in checked:
+            continue
+        checked.add(sym)
+        if sym in deleted_symbols:
+            findings.append(Finding("WARN", "adr-stale", rel, f"ADR references deleted symbol `{sym}`"))
+        elif known_symbols and sym not in known_symbols and ("::" in sym or any(c.isupper() for c in sym[1:])):
+            findings.append(Finding("WARN", "adr-stale", rel, f"ADR references symbol `{sym}` not found in graphify manifest"))
+    return findings
+
+
 def lint(vault=hive.VAULT, today=None, files=None):
     vault = Path(vault)
     today = today or date.today().isoformat()
+    projects_root = hive.load_config().get("projects", hive.PROJECTS)
     all_files = list(walk(vault))
     resolver = Resolver(all_files)
     if files is not None:
@@ -186,8 +238,10 @@ def lint(vault=hive.VAULT, today=None, files=None):
             for hit in hits:
                 inbound[hit].add(rel_posix)
                 outbound[rel_posix].add(hit)
-        if meta.get("type") == "adr" and meta.get("status") == "superseded" and not (outbound[rel_posix] - {rel_posix}):
-            findings.append(Finding("ERROR", "superseded-unlinked", rel_posix, "superseded ADR must link its successor"))
+        if meta.get("type") == "adr":
+            findings += check_adr_staleness(rel_posix, text, projects_root)
+            if meta.get("status") == "superseded" and not (outbound[rel_posix] - {rel_posix}):
+                findings.append(Finding("ERROR", "superseded-unlinked", rel_posix, "superseded ADR must link its successor"))
     findings += check_names(notes)
     if files is None:
         findings += check_orphans(notes, inbound)

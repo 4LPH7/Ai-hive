@@ -75,8 +75,10 @@ enum Commands {
     },
     /// Run index, search and graph benchmarks
     Bench,
-    /// Show recent session telemetry events from the local ledger
+    /// Show recent session telemetry events or score session outcome
     Ledger {
+        #[command(subcommand)]
+        command: Option<LedgerCommands>,
         #[arg(long)]
         tail: Option<usize>,
         #[arg(long)]
@@ -92,10 +94,32 @@ enum Commands {
     },
     /// Run cross-platform pre-commit quality gate (lint + tests)
     PreCommit,
+    /// Mine recurring zero-hit queries and skill misses into inbox proposals
+    Mine {
+        #[arg(long, default_value = "2")]
+        min_count: usize,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// ACE playbook curator operations
     Ace {
         #[command(subcommand)]
         cmd: AceCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LedgerCommands {
+    /// Score a session outcome against test exit code and git diff
+    Score {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value = "0")]
+        exit_code: i32,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        repo: Option<PathBuf>,
     },
 }
 
@@ -195,16 +219,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let res = run_bench(&mut idx)?;
                 println!("{}", res);
             }
-            Commands::Ledger { tail, project } => {
-                let entries = ai_hive::ledger::read_ledger(&cfg.ledger, tail, project.as_deref());
-                if entries.is_empty() {
-                    println!("ledger: no entries in {}", cfg.ledger.display());
-                } else {
-                    for e in entries {
-                        println!(
-                            "{} [{}] {} project={} hits={} bullets={} ({:.1}ms) - query={:?}",
-                            e.ts, e.agent, e.event, e.project, e.hits.len(), e.injected_bullets.len(), e.duration_ms, e.query
-                        );
+            Commands::Ledger { command, tail, project } => {
+                match command {
+                    Some(LedgerCommands::Score { session, exit_code, project, repo }) => {
+                        let res = ai_hive::ledger::score_session(
+                            &cfg.ledger,
+                            &cfg.vault,
+                            session.as_deref(),
+                            exit_code,
+                            project.as_deref(),
+                            repo.as_deref(),
+                        )?;
+                        if res.scored {
+                            println!(
+                                "ledger score: session={} reward={} (exit_code={}) bullets={} skills={} changes={}",
+                                res.session_id, res.reward, res.test_exit_code, res.bullets.len(), res.skills.len(), res.changes
+                            );
+                        } else {
+                            println!("ledger score: session not scored (session={})", res.session_id);
+                        }
+                    }
+                    None => {
+                        let entries = ai_hive::ledger::read_ledger(&cfg.ledger, tail, project.as_deref());
+                        if entries.is_empty() {
+                            println!("ledger: no entries in {}", cfg.ledger.display());
+                        } else {
+                            for e in entries {
+                                println!(
+                                    "{} [{}] {} project={} hits={} bullets={} ({:.1}ms) - query={:?}",
+                                    e.ts, e.agent, e.event, e.project, e.hits.len(), e.injected_bullets.len(), e.duration_ms, e.query
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -233,6 +279,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("pre-commit: cargo test failed");
                         std::process::exit(1);
                     }
+                }
+            }
+            Commands::Mine { min_count, dry_run } => {
+                let res = ai_hive::miner::mine_gaps(&cfg.ledger, &cfg.vault, min_count, dry_run)?;
+                println!(
+                    "mine: {} gaps analyzed, {} clusters, {} proposals generated (dry_run={})",
+                    res.total_gaps, res.total_clusters, res.proposals_generated, res.dry_run
+                );
+                for p in res.proposals {
+                    println!("  proposal: [{}] \"{}\" (count={}) -> {}", p.hash, p.representative, p.count, p.file);
                 }
             }
             Commands::Ace { cmd } => {

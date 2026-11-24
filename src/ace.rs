@@ -171,9 +171,28 @@ pub struct Bullet {
     pub id: String,
     #[serde(default)]
     pub seen: i64,
+    #[serde(default)]
+    pub updated: Option<String>,
+    #[serde(default)]
+    pub explicit_updated: Option<String>,
     pub helpful: i64,
     pub harmful: i64,
     pub content: String,
+}
+
+pub fn bullet_decay(b: &Bullet, today: chrono::NaiveDate) -> i64 {
+    if b.helpful > 0 || b.seen < 10 {
+        return 0;
+    }
+    if let Some(up_str) = &b.updated {
+        if let Ok(b_date) = chrono::NaiveDate::parse_from_str(up_str, "%Y-%m-%d") {
+            let days = (today - b_date).num_days();
+            if days > 30 {
+                return std::cmp::max(3, (days - 30) / 10 + 1);
+            }
+        }
+    }
+    0
 }
 
 pub fn tokenize_words(text: &str) -> HashSet<String> {
@@ -210,8 +229,19 @@ pub fn parse(text: &str) -> HashMap<String, Vec<Bullet>> {
         sections.insert(name.to_string(), Vec::new());
     }
 
-    let re_line = Regex::new(r"^- \[([a-z]{3}-\d{5})\] (?:seen=(\d+)\s+)?helpful=(\d+)\s+harmful=(\d+)\s+::\s+(.+)$").unwrap();
+    let re_line = Regex::new(
+        r"^- \[([a-z]{3}-\d{5})\] (?:seen=(\d+)\s+)?(?:updated=(\d{4}-\d{2}-\d{2})\s+)?helpful=(\d+)\s+harmful=(\d+)\s+::\s+(.+)$"
+    ).unwrap();
     let re_heading = Regex::new(r"^##\s+(\w+)").unwrap();
+    let re_up = Regex::new(r"^updated:\s*(\d{4}-\d{2}-\d{2})").unwrap();
+
+    let mut default_updated: Option<String> = None;
+    for line in text.lines() {
+        if let Some(cap) = re_up.captures(line.trim()) {
+            default_updated = Some(cap[1].to_string());
+            break;
+        }
+    }
 
     let mut current_section: Option<String> = None;
 
@@ -230,13 +260,17 @@ pub fn parse(text: &str) -> HashMap<String, Vec<Bullet>> {
         if let Some(ref sec) = current_section {
             if let Some(cap) = re_line.captures(trimmed) {
                 let id = cap[1].to_string();
-                let helpful = cap[3].parse::<i64>().unwrap_or(0);
-                let harmful = cap[4].parse::<i64>().unwrap_or(0);
+                let helpful = cap[4].parse::<i64>().unwrap_or(0);
+                let harmful = cap[5].parse::<i64>().unwrap_or(0);
                 let seen = cap.get(2).and_then(|m| m.as_str().parse::<i64>().ok()).unwrap_or(helpful + harmful);
-                let content = cap[5].trim().to_string();
+                let explicit_updated = cap.get(3).map(|m| m.as_str().to_string());
+                let updated = explicit_updated.clone().or_else(|| default_updated.clone());
+                let content = cap[6].trim().to_string();
                 sections.get_mut(sec).unwrap().push(Bullet {
                     id,
                     seen,
+                    updated,
+                    explicit_updated,
                     helpful,
                     harmful,
                     content,
@@ -262,14 +296,26 @@ pub fn render(scope: &str, sections: &HashMap<String, Vec<Bullet>>, today: &str)
         body.push(format!("\n## {}\n", name));
         if let Some(bullets) = sections.get(name) {
             for b in bullets {
-                body.push(format!(
-                    "- [{}] seen={} helpful={} harmful={} :: {}",
-                    b.id,
-                    if b.seen > 0 { b.seen } else { b.helpful + b.harmful },
-                    b.helpful,
-                    b.harmful,
-                    b.content
-                ));
+                if let Some(ref up) = b.explicit_updated {
+                    body.push(format!(
+                        "- [{}] seen={} updated={} helpful={} harmful={} :: {}",
+                        b.id,
+                        if b.seen > 0 { b.seen } else { b.helpful + b.harmful },
+                        up,
+                        b.helpful,
+                        b.harmful,
+                        b.content
+                    ));
+                } else {
+                    body.push(format!(
+                        "- [{}] seen={} helpful={} harmful={} :: {}",
+                        b.id,
+                        if b.seen > 0 { b.seen } else { b.helpful + b.harmful },
+                        b.helpful,
+                        b.harmful,
+                        b.content
+                    ));
+                }
             }
         }
     }
@@ -342,10 +388,12 @@ pub fn apply(
                     found = true;
                     if let Some(h) = t.helpful {
                         b.helpful += h;
+                        b.seen = b.seen.max(b.helpful + b.harmful);
                         changed += 1;
                     }
                     if let Some(h) = t.harmful {
                         b.harmful += h;
+                        b.seen = b.seen.max(b.helpful + b.harmful);
                         changed += 1;
                     }
                 }
@@ -409,9 +457,12 @@ pub fn apply(
                 }
             }
             let new_id = format!("{}-{:05}", prefix, next_num);
+            let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
             bullets.push(Bullet {
                 id: new_id,
                 seen: 1,
+                updated: Some(today_str),
+                explicit_updated: None,
                 helpful: 0,
                 harmful: 0,
                 content: content.to_string(),
@@ -420,9 +471,13 @@ pub fn apply(
         }
     }
 
-    // 4. Prune harmful bullets
+    // 4. Prune harmful and decayed bullets
+    let today_naive = chrono::Local::now().date_naive();
     for bullets in sections.values_mut() {
-        bullets.retain(|b| b.harmful < b.helpful + PRUNE_MARGIN);
+        bullets.retain(|b| {
+            let decay = bullet_decay(b, today_naive);
+            b.harmful + decay < b.helpful + PRUNE_MARGIN
+        });
     }
 
     // 5. Enforce MAX_BULLETS cap

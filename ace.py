@@ -29,7 +29,7 @@ STATE_PATH = Path(os.environ.get("HIVE_ACE_STATE") or Path(
     os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or os.getcwd()) / "hive" / "ace-state.json")
 
 SECTIONS = {"strategies": "str", "pitfalls": "pit", "commands": "cmd", "conventions": "con"}
-LINE_RE = re.compile(r"^- \[([a-z]{3}-\d{5})\] (?:seen=(\d+)\s+)?helpful=(\d+)\s+harmful=(\d+)\s+::\s+(.+)$")
+LINE_RE = re.compile(r"^- \[([a-z]{3}-\d{5})\] (?:seen=(\d+)\s+)?(?:updated=(\d{4}-\d{2}-\d{2})\s+)?helpful=(\d+)\s+harmful=(\d+)\s+::\s+(.+)$")
 MAX_BULLET_CHARS = 300
 MAX_ADDS_PER_APPLY = 5      # a noisy reflection cannot flood the playbook
 MAX_BULLETS = 80            # grow-and-refine cap per playbook
@@ -179,11 +179,19 @@ def parse(text):
             continue
         m = LINE_RE.match(line.strip())
         if m and current:
-            helpful = int(m.group(3))
-            harmful = int(m.group(4))
+            helpful = int(m.group(4))
+            harmful = int(m.group(5))
             seen = int(m.group(2)) if m.group(2) is not None else (helpful + harmful)
-            sections[current].append({"id": m.group(1), "seen": seen, "helpful": helpful,
-                                      "harmful": harmful, "content": m.group(5).strip()})
+            bullet = {
+                "id": m.group(1),
+                "seen": seen,
+                "helpful": helpful,
+                "harmful": harmful,
+                "content": m.group(6).strip(),
+            }
+            if m.group(3):
+                bullet["updated"] = m.group(3)
+            sections[current].append(bullet)
     return sections
 
 
@@ -195,8 +203,11 @@ def render(scope, sections, today):
     body = []
     for name in SECTIONS:
         body.append(f"\n## {name}\n")
-        body += [f"- [{b['id']}] seen={b.get('seen', b['helpful'] + b['harmful'])} helpful={b['helpful']} harmful={b['harmful']} :: {b['content']}"
-                 for b in sections[name]]
+        lines = []
+        for b in sections[name]:
+            up = f" updated={b['updated']}" if b.get("updated") else ""
+            lines.append(f"- [{b['id']}] seen={b.get('seen', b['helpful'] + b['harmful'])}{up} helpful={b['helpful']} harmful={b['harmful']} :: {b['content']}")
+        body += lines
     return head + "\n".join(body) + "\n"
 
 
@@ -223,12 +234,32 @@ def jaccard(a, b):
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
-def net(b):
-    return b["helpful"] - b["harmful"]
+def bullet_decay(b, today_date=None):
+    if b.get("helpful", 0) > 0:
+        return 0
+    if b.get("seen", 0) < 10:
+        return 0
+    up_str = b.get("updated")
+    if not up_str:
+        return 0
+    try:
+        t_date = today_date or datetime.date.today()
+        b_date = datetime.date.fromisoformat(up_str)
+        days = (t_date - b_date).days
+        if days > 30:
+            return max(3, (days - 30) // 10 + 1)
+    except (ValueError, TypeError):
+        pass
+    return 0
 
 
-def apply_ops(sections, ops):
+def net(b, today_date=None):
+    return b["helpful"] - b["harmful"] - bullet_decay(b, today_date)
+
+
+def apply_ops(sections, ops, today=None):
     """Pure: returns (new_sections, report). ops: [{type: ADD, section, content} | {type: TAG, id, tag}]."""
+    t_date = datetime.date.fromisoformat(today) if today else datetime.date.today()
     new = {name: [dict(b) for b in bullets] for name, bullets in sections.items()}
     by_id = {b["id"]: b for bullets in new.values() for b in bullets}
     report = {"added": [], "reinforced": [], "tagged": 0, "rejected": [], "pruned": []}
@@ -237,17 +268,25 @@ def apply_ops(sections, ops):
     for op in ops if isinstance(ops, list) else []:
         kind = str(op.get("type", "")).upper() if isinstance(op, dict) else ""
         if kind == "TAG":
-            b, tag = by_id.get(str(op.get("id"))), op.get("tag")
+            b = by_id.get(str(op.get("id")))
+            tag = op.get("tag")
+            if not tag:
+                if op.get("helpful"):
+                    tag = "helpful"
+                elif op.get("harmful"):
+                    tag = "harmful"
+            delta = op.get(tag, 1) if isinstance(op.get(tag), int) else 1
             if b and tag in ("helpful", "harmful"):
-                b[tag] += 1
+                b[tag] += delta
+                b["seen"] = max(b.get("seen", 0), b["helpful"] + b["harmful"])
                 report["tagged"] += 1
             elif str(op.get("id", "")).startswith("skill:") and tag in ("helpful", "harmful"):
                 report["tagged"] += 1
                 try:
                     import ledger, hive
-                    cfg = hive.load_config()
+                    ledger_dest = os.environ.get("HIVE_LEDGER") or hive.load_config()["ledger"]
                     skill_name = str(op.get("id"))[6:]
-                    ledger.record(cfg["ledger"], event="skill_feedback", project=skill_name, query=tag, hits=[], duration_ms=0.0)
+                    ledger.record(ledger_dest, event="skill_feedback", project=skill_name, query=tag, hits=[], duration_ms=0.0)
                 except Exception:
                     pass
             continue
@@ -273,27 +312,27 @@ def apply_ops(sections, ops):
         new[section].append(bullet)
         by_id[bullet["id"]] = bullet
         report["added"].append(bullet["id"])
-    for name in new:  # refine: prune bullets the evidence says hurt
-        keep = [b for b in new[name] if b["harmful"] < b["helpful"] + PRUNE_MARGIN]
+    for name in new:  # refine: prune bullets the evidence says hurt or decayed
+        keep = [b for b in new[name] if (b["harmful"] + bullet_decay(b, t_date)) < b["helpful"] + PRUNE_MARGIN]
         report["pruned"] += [b["id"] for b in new[name] if b not in keep]
         new[name] = keep
     everything = [b for bullets in new.values() for b in bullets]
     if len(everything) > MAX_BULLETS:  # over cap: drop lowest net score, oldest first
-        drop = sorted(everything, key=lambda b: (net(b), int(b["id"].split("-")[1])))[:len(everything) - MAX_BULLETS]
+        drop = sorted(everything, key=lambda b: (net(b, t_date), int(b["id"].split("-")[1])))[:len(everything) - MAX_BULLETS]
         ids = {b["id"] for b in drop}
         report["pruned"] += sorted(ids)
         new = {name: [b for b in bullets if b["id"] not in ids] for name, bullets in new.items()}
     return new, report
 
 
-def apply(scope, ops):
+def apply(scope, ops, today=None):
     """Load, apply ops under atomic lock, save, return report."""
     path = scope_path(scope)
     path.parent.mkdir(parents=True, exist_ok=True)
     with PlaybookLock(path):
         current = load(scope)
-        new_sections, report = apply_ops(current, ops)
-        save(scope, new_sections)
+        new_sections, report = apply_ops(current, ops, today=today)
+        save(scope, new_sections, today=today)
         return report
 
 

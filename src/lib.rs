@@ -9,3 +9,4 @@ pub mod eval;
 pub mod bench;
 pub mod ledger;
 pub mod skill;
+pub mod miner;

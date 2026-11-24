@@ -1086,11 +1086,47 @@ def tool_eval(golden=str(Path(__file__).with_name("eval_golden.json")), k=5):
     return "\n".join([f"Recall@{k} {found}/{n} = {found / n:.2f}   MRR {rr / n:.3f}"] + misses)
 
 
-def tool_ledger(tail=None, project=None):
+def tool_ledger(*args, tail=None, project=None):
     import ledger
     cfg = load_config()
+    if args and args[0] == "score":
+        import argparse
+        parser = argparse.ArgumentParser(prog="hive ledger score")
+        parser.add_argument("--session")
+        parser.add_argument("--exit-code", type=int, default=0)
+        parser.add_argument("--project")
+        parser.add_argument("--repo")
+        parsed = parser.parse_args(args[1:])
+        res = ledger.score_session(
+            session_id=parsed.session,
+            repo_dir=parsed.repo,
+            test_exit_code=parsed.exit_code,
+            ledger_path=cfg["ledger"],
+            vault_path=cfg["vault"],
+            project=parsed.project,
+        )
+        if res.get("scored"):
+            return (f"ledger score: session={res['session_id']} reward={res['reward']} "
+                    f"(exit_code={res['test_exit_code']}) bullets={len(res['bullets'])} "
+                    f"skills={len(res['skills'])} changes={res['report'].get('tagged', 0)}")
+        return f"ledger score: session not scored (session={res.get('session_id')})"
+
     t = int(tail) if tail is not None else None
-    entries = ledger.read_ledger(cfg["ledger"], tail=t, project=project)
+    p = project
+    if args:
+        i = 0
+        while i < len(args):
+            if args[i] == "--tail" and i + 1 < len(args):
+                t = int(args[i + 1])
+                i += 2
+            elif args[i] == "--project" and i + 1 < len(args):
+                p = args[i + 1]
+                i += 2
+            else:
+                if t is None and args[i].isdigit():
+                    t = int(args[i])
+                i += 1
+    entries = ledger.read_ledger(cfg["ledger"], tail=t, project=p)
     if not entries:
         return f"ledger: no entries in {cfg['ledger']}"
     lines = []
@@ -1115,6 +1151,29 @@ def cmd_pre_commit(*args):
     return "All pre-commit checks passed cleanly."
 
 
+def tool_mine(*args):
+    import argparse
+    import miner
+    cfg = load_config()
+    parser = argparse.ArgumentParser(prog="hive mine")
+    parser.add_argument("--min-count", type=int, default=2)
+    parser.add_argument("--dry-run", action="store_true")
+    parsed = parser.parse_args(args)
+    res = miner.mine_gaps(
+        ledger_path=cfg["ledger"],
+        vault_path=cfg["vault"],
+        min_count=parsed.min_count,
+        dry_run=parsed.dry_run,
+    )
+    lines = [
+        f"mine: {res['total_gaps']} gaps analyzed, {res['total_clusters']} clusters, "
+        f"{res['proposals_generated']} proposals generated (dry_run={res['dry_run']})"
+    ]
+    for p in res["proposals"]:
+        lines.append(f"  proposal: [{p['hash']}] \"{p['representative']}\" (count={p['count']}) -> {p['file']}")
+    return "\n".join(lines)
+
+
 def main(argv):
     cmd, *rest = argv or ["serve"]
     if cmd == "serve":
@@ -1123,6 +1182,7 @@ def main(argv):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
+        "mine": tool_mine,
     }
     if cmd not in commands:
         print(__doc__)

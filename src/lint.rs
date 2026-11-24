@@ -141,7 +141,105 @@ pub fn links_in(body: &str) -> Vec<String> {
     targets
 }
 
+pub fn check_adr_staleness(
+    rel: &str,
+    text: &str,
+    projects_root: &Path,
+) -> Vec<Finding> {
+    if !rel.starts_with("projects/") || !rel.contains("/adrs/") {
+        return Vec::new();
+    }
+    let parts: Vec<&str> = rel.split('/').collect();
+    if parts.len() < 3 {
+        return Vec::new();
+    }
+    let slug = parts[1];
+    let proj_dir = projects_root.join(slug);
+    let graphify_out = proj_dir.join("graphify-out");
+    let manifest_p = graphify_out.join("manifest.json");
+    let graph_p = graphify_out.join("graph.json");
+
+    let mut known_symbols = HashSet::new();
+    let mut deleted_symbols = HashSet::new();
+
+    if manifest_p.is_file() {
+        if let Ok(content) = fs::read_to_string(&manifest_p) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(arr) = v.get("symbols").and_then(|s| s.as_array()) {
+                    for sym in arr {
+                        if let Some(s) = sym.as_str() {
+                            known_symbols.insert(s.to_string());
+                        }
+                    }
+                }
+                if let Some(arr) = v.get("deleted_symbols").and_then(|s| s.as_array()) {
+                    for sym in arr {
+                        if let Some(s) = sym.as_str() {
+                            deleted_symbols.insert(s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    } else if graph_p.is_file() {
+        if let Ok(content) = fs::read_to_string(&graph_p) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(nodes) = v.get("nodes").and_then(|n| n.as_array()) {
+                    for node in nodes {
+                        if let Some(name) = node.get("name").and_then(|n| n.as_str()) {
+                            known_symbols.insert(name.to_string());
+                        }
+                        if let Some(label) = node.get("label").and_then(|n| n.as_str()) {
+                            known_symbols.insert(label.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if known_symbols.is_empty() && deleted_symbols.is_empty() {
+        return Vec::new();
+    }
+
+    let sym_re = Regex::new(r"`([A-Za-z_][A-Za-z0-9_:]*)`").unwrap();
+    let mut findings = Vec::new();
+    let stopwords: HashSet<&str> = [
+        "true", "false", "null", "none", "str", "int", "dict", "bool", "json", "path", "self", "file"
+    ].into_iter().collect();
+    let mut checked = HashSet::new();
+
+    for cap in sym_re.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            let sym = m.as_str();
+            if stopwords.contains(&sym.to_lowercase().as_str()) || sym.len() < 3 || checked.contains(sym) {
+                continue;
+            }
+            checked.insert(sym.to_string());
+            if deleted_symbols.contains(sym) {
+                findings.push(Finding {
+                    severity: "WARN".to_string(),
+                    code: "adr-stale".to_string(),
+                    path: rel.to_string(),
+                    message: format!("ADR references deleted symbol `{}`", sym),
+                });
+            } else if !known_symbols.is_empty() && !known_symbols.contains(sym) && (sym.contains("::") || sym.chars().skip(1).any(|c| c.is_uppercase())) {
+                findings.push(Finding {
+                    severity: "WARN".to_string(),
+                    code: "adr-stale".to_string(),
+                    path: rel.to_string(),
+                    message: format!("ADR references symbol `{}` not found in graphify manifest", sym),
+                });
+            }
+        }
+    }
+
+    findings
+}
+
 pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding> {
+    let cfg = crate::common::load_config(Some(vault.to_path_buf()), None, None, None);
+    let projects_root = cfg.projects;
     let all_files = walk_vault(vault);
     let resolver = Resolver::new(&all_files);
 
@@ -308,6 +406,7 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
         // Links & ADR tracking
         let links = links_in(&body);
         if meta.get("type").map(|t| t.as_str()) == Some("adr") {
+            findings.extend(check_adr_staleness(&rel, &content, &projects_root));
             adr_statuses.insert(
                 rel.clone(),
                 (
