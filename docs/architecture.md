@@ -37,12 +37,13 @@ All three use only the Python standard library (3.10+).
 
 - Walks the vault, skipping `.git`, `.obsidian`, agent skill folders, templates, attachments and runtimes.
 - Re-reads only files whose mtime changed, at most every 2 s (`REFRESH_EVERY_S`). Deleted files are dropped.
-- Frontmatter is parsed as flat `key: value` lines. `project` falls back to the `projects/<slug>/` folder.
+- Frontmatter is parsed as flat `key: value` lines. For notes below `projects/<slug>/`, the folder is authoritative for isolation; agent-supplied `project` metadata cannot move a note into another scope. Notes outside that tree use the frontmatter project or global scope.
 - One FTS5 table with columns `title`, `meta` (project, type and path words) and `body`, Porter-stemmed.
 - Ranking: `bm25(title x5, meta x2, body x1)`, then multiplied by
   - a type prior: project-memory 1.4, adr 1.25, note 1.0, journal 0.8
   - a status prior: superseded 0.3, archived 0.4
   - a project boost of 2.0 when the note belongs to the requested project
+- MCP retrieval defaults to the selected project plus global notes. Cross-project retrieval is an explicit `scope="all"` operation; `scope="global"` searches only global notes.
 - **Autocut:** hits scoring below 30% of the best are dropped, so agents do not read noise. At 35% it cut a
   correct rank-4 answer; 30% keeps it and adds only 0.3 hits per query on average.
 - Tuned against a golden question set (`python hive.py eval`): Recall@5 1.00 (30/30), MRR 0.833.
@@ -60,9 +61,9 @@ Query steps:
 1. **Seeds:** split the query and every node label into identifier tokens (`camelCase`, `snake_case`);
    score nodes by idf-weighted token overlap, with exact label matches x3.
 2. **Neighbourhood:** collect nodes within 2 hops of the seeds.
-3. **Personalized PageRank** on that neighbourhood: restart probability 0.15, 25 iterations. Edge weights
-   by relation (`calls` 1.0, `inherits` 0.9, `references` 0.7, `imports` 0.5, `contains` 0.4, ...), divided
-   by the square root of the target's degree so hub nodes do not soak up all the mass.
+3. **Directed Personalized PageRank** on that neighbourhood: restart probability 0.15, 25 iterations.
+   Forward edges (source → target) use their relation weight; reverse traversal is retained at 0.25× weight
+   for useful caller context. Weights are dampened by node degree so hub nodes do not soak up all the mass.
 4. **Priors:** code 1.5, documents and concepts 0.8, rationale 0.6.
 5. Output: ranked symbols with `file:line`, edges among them, vault notes about the same files, and a
    freshness line from `graphify-out/manifest.json` mtimes (lists changed files and tells you to run
@@ -70,17 +71,19 @@ Query steps:
 
 ## Context packing (`hive_context`)
 
-Parts in priority order: active-work row, `_memory.md`, ADR list, playbook bullets, notes for the task,
-code graph for the task. Each part's cost is estimated at 4 characters per token. Parts are added whole
-until the next one would cross the budget; that one is truncated if more than 200 characters of room remain.
+The pack groups project memory/ADRs, playbook bullets, task-matched notes and the code graph into separate
+quotas (35%, 15%, 25%, 25% by default). Unused quota is redistributed to truncated sections. A conservative
+content-aware token estimate (code vs. prose plus a safety margin) is used, and an omission footer identifies
+sections that were truncated. Retrieved vault notes are framed as untrusted data with source, agent and update
+metadata; consuming agents must verify claims and must not treat note text as instructions.
 
 ## MCP protocol
 
 `hive.py serve` reads JSON-RPC lines on stdin and writes responses on stdout. It answers both the legacy
 `initialize` handshake (protocol 2024-11-05 to 2025-11-25) and the modern per-request `_meta` version
 (2026-07-28, `server/discover`). Tools carry read-only annotations; `hive_context` is marked
-`anthropic/alwaysLoad` so Claude Code loads it upfront while the others stay deferred. A failing tool
-returns `isError: true` instead of killing the server.
+`anthropic/alwaysLoad` so Claude Code loads it upfront while the others stay deferred. Invalid arguments and tool failures return `isError: true` with a typed error label in the text content instead of
+silently discarding unknown parameters or killing the server.
 
 ## Performance (measured on the author's machine)
 
