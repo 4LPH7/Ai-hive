@@ -164,10 +164,15 @@ pub struct MineResult {
     pub proposals: Vec<MineProposal>,
 }
 
-pub fn scan_ledger_gaps(ledger_path: &Path) -> Vec<(String, crate::ledger::LedgerEntry)> {
-    let entries = crate::ledger::read_ledger(ledger_path, None, None);
+pub fn scan_ledger_gaps(ledger_path: &Path, project: Option<&str>) -> Vec<(String, crate::ledger::LedgerEntry)> {
+    let entries = crate::ledger::read_ledger(ledger_path, None, project);
     let mut gaps = Vec::new();
     for e in entries {
+        if let Some(p) = project {
+            if !e.project.is_empty() && e.project != p {
+                continue;
+            }
+        }
         let q = e.query.trim().to_string();
         if q.is_empty() {
             continue;
@@ -210,7 +215,7 @@ pub fn mine_gaps(
     min_count: usize,
     dry_run: bool,
 ) -> Result<MineResult, String> {
-    let gaps = scan_ledger_gaps(ledger_path);
+    let gaps = scan_ledger_gaps(ledger_path, None);
     let total_gaps = gaps.len();
     let clusters = cluster_gaps(gaps);
     let total_clusters = clusters.len();

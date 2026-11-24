@@ -452,29 +452,38 @@ def install_skill(package_name, target_dir=None, dry_run=False):
             "message": f"[dry-run] Would install {package_name} to {target_dir}",
         }
 
-    target_dir.mkdir(parents=True, exist_ok=True)
-
     npx_bin = shutil.which("npx")
     if not npx_bin:
         return {"status": "error", "error": "npx not found on PATH; cannot install skill"}
 
+    import tempfile
+    staging_base = Path(tempfile.mkdtemp(prefix="hive-skill-stage-"))
+    staging_dir = staging_base / "skill"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
     try:
         proc = subprocess.run(
-            [npx_bin, "--yes", "skills", "add", package_name, "--dest", str(target_dir)],
+            [npx_bin, "--yes", "skills", "add", package_name, "--dest", str(staging_dir)],
             capture_output=True,
             text=True,
             timeout=30,
         )
         if proc.returncode != 0:
-            shutil.rmtree(target_dir, ignore_errors=True)
             return {"status": "error", "error": f"skills add failed: {proc.stderr.strip()}"}
 
-        # Run security audit on installed files
-        is_safe, reason = audit_skill_safety(target_dir)
+        # Run security audit on installed files in staging
+        is_safe, reason = audit_skill_safety(staging_dir)
         if not is_safe:
-            # Atomic rollback on security failure
-            shutil.rmtree(target_dir, ignore_errors=True)
             return {"status": "error", "error": f"Security audit failed: {reason}"}
+
+        # Staging passed; safely copy into target directory
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for item in staging_dir.iterdir():
+            dest_item = target_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest_item, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dest_item)
 
         # Pin package with SHA-256 tree hash in .skill-lock.json
         import hashlib, datetime
@@ -505,8 +514,9 @@ def install_skill(package_name, target_dir=None, dry_run=False):
             "installed_path": str(target_dir),
         }
     except Exception as e:
-        shutil.rmtree(target_dir, ignore_errors=True)
         return {"status": "error", "error": str(e)}
+    finally:
+        shutil.rmtree(staging_base, ignore_errors=True)
 
 
 def load_skill_context(skill_path_or_meta):

@@ -481,3 +481,86 @@ fn test_llm_privacy_and_offline_fail_open_rust() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_codex_review_fixes_rust() {
+    let tmp = std::env::temp_dir().join(format!("hive_review_fixes_{}", std::process::id()));
+    let vault = tmp.join("vault");
+    let proj_target = vault.join("projects").join("target");
+    let proj_other = vault.join("projects").join("other");
+    std::fs::create_dir_all(&proj_target).unwrap();
+    std::fs::create_dir_all(&proj_other).unwrap();
+
+    // 1. Search candidate filtering before LIMIT
+    // Create 10 notes in 'other' with heavy repetitions of "database"
+    for i in 0..10 {
+        let p = proj_other.join(format!("doc_{}.md", i));
+        std::fs::write(&p, format!("---\ntype: note\nproject: other\n---\n# Database database database\nContent {}\n", i)).unwrap();
+    }
+    // Create 1 note in 'target' with single occurrence of "database"
+    let target_note = proj_target.join("target_doc.md");
+    std::fs::write(&target_note, "---\ntype: note\nproject: target\n---\n# Database overview\nTarget note\n").unwrap();
+
+    let db_path = tmp.join("test_search.sqlite");
+    let mut idx = ai_hive::index::Index::new(Some(vault.clone()), Some(db_path)).unwrap();
+    idx.refresh(true).unwrap();
+
+    // Limit = 2, so fetch_limit = 8. Without project filter in WHERE clause before LIMIT,
+    // the 10 'other' notes would saturate the 8 slots and push target_doc out.
+    let hits = idx.search("database", "target", 2, "project").unwrap();
+    let hit_paths: Vec<String> = hits.into_iter().map(|h| h.path).collect();
+    assert!(hit_paths.contains(&"projects/target/target_doc.md".to_string()));
+
+    // 2. Curation telemetry filtered by project
+    let ledger_path = tmp.join("ledger.jsonl");
+    let l1 = serde_json::json!({"ts": "2026-11-24T10:00:00Z", "project": "proj-a", "event": "query", "query": "miss-a", "hits": [], "injected_bullets": [], "duration_ms": 1.0, "agent": "test", "session_id": "s1"});
+    let l2 = serde_json::json!({"ts": "2026-11-24T10:01:00Z", "project": "proj-b", "event": "query", "query": "miss-b", "hits": [], "injected_bullets": [], "duration_ms": 1.0, "agent": "test", "session_id": "s2"});
+    let l3 = serde_json::json!({"ts": "2026-11-24T10:02:00Z", "project": "proj-a", "event": "query", "query": "hit-a", "hits": ["note1"], "injected_bullets": [], "duration_ms": 1.0, "agent": "test", "session_id": "s3"});
+    let lines = format!("{}\n{}\n{}\n", l1, l2, l3);
+    std::fs::write(&ledger_path, lines).unwrap();
+
+    let gaps_a = ai_hive::miner::scan_ledger_gaps(&ledger_path, Some("proj-a"));
+    assert_eq!(gaps_a.len(), 1);
+    assert_eq!(gaps_a[0].0, "miss-a");
+
+    let gaps_b = ai_hive::miner::scan_ledger_gaps(&ledger_path, Some("proj-b"));
+    assert_eq!(gaps_b.len(), 1);
+    assert_eq!(gaps_b[0].0, "miss-b");
+
+    let gaps_all = ai_hive::miner::scan_ledger_gaps(&ledger_path, None);
+    assert_eq!(gaps_all.len(), 2);
+
+    // 3. Failed skill install preserves existing directory and files
+    let existing_dir = tmp.join("existing_skill");
+    std::fs::create_dir_all(&existing_dir).unwrap();
+    let canary = existing_dir.join("canary.txt");
+    std::fs::write(&canary, "safe data").unwrap();
+
+    // Call install with non-existent package
+    let res = ai_hive::skill::install_skill("non-existent-xyz-pkg-12345", Some(&existing_dir), false);
+    assert!(res.is_err());
+    assert!(existing_dir.is_dir());
+    assert!(canary.is_file());
+    assert_eq!(std::fs::read_to_string(&canary).unwrap(), "safe data");
+
+    // 4. Default scope in MCP search when project is provided
+    let rpc_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "hive_search",
+            "arguments": {
+                "query": "database",
+                "project": "target"
+            }
+        }
+    });
+    let rpc_res = ai_hive::mcp::handle_rpc(&mut idx, &rpc_req).unwrap();
+    let rpc_str = rpc_res.to_string();
+    assert!(rpc_str.contains("target_doc.md"));
+    // Other project doc should NOT appear because scope defaulted to 'project'
+    assert!(!rpc_str.contains("projects/other/doc_0.md"));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

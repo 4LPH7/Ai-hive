@@ -105,12 +105,14 @@ class GapCluster:
         return "\n".join(lines)
 
 
-def scan_ledger_gaps(ledger_path):
+def scan_ledger_gaps(ledger_path, project=None):
     """Scan ledger for zero-hit search queries and skill misses."""
     import ledger
-    entries = ledger.read_ledger(ledger_path)
+    entries = ledger.read_ledger(ledger_path, project=project)
     gaps = []
     for e in entries:
+        if project and e.get("project") and e.get("project") != project:
+            continue
         event = e.get("event")
         hits = e.get("hits") or []
         query = (e.get("query") or "").strip()

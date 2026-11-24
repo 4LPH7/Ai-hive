@@ -336,55 +336,97 @@ impl Index {
             .collect::<Vec<_>>()
             .join(" OR ");
 
-        let mut stmt = self.conn.prepare(
-            "SELECT f.path, n.title, n.project, n.type, n.status, n.updated, n.agent, n.source,
-                    -bm25(notes_fts, 0.0, 5.0, 2.0, 1.0) AS s,
-                    snippet(notes_fts, 3, '[', ']', '...', 18)
-             FROM notes_fts f JOIN notes n ON n.path = f.path
-             WHERE notes_fts MATCH ? ORDER BY s DESC LIMIT ?"
-        ).map_err(|e| e.to_string())?;
-
         let fetch_limit = limit * 4;
-        let rows = stmt.query_map(params![match_expr, fetch_limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, f64>(8)?,
-                row.get::<_, String>(9)?,
-            ))
-        }).map_err(|e| e.to_string())?;
-
         let mut hits = Vec::new();
-        for r in rows.flatten() {
-            let (path, title, proj, ntype, status, updated, agent, source, mut score, snip) = r;
-            if scope == "project" && !project.is_empty() && proj != project && !proj.is_empty() && proj != "global" {
-                continue;
-            }
 
-            score *= type_prior(&ntype) * status_prior(&status);
-            if !project.is_empty() && proj == project {
-                score *= PROJECT_BOOST;
-            }
+        if scope == "project" && !project.is_empty() {
+            let mut stmt = self.conn.prepare(
+                "SELECT f.path, n.title, n.project, n.type, n.status, n.updated, n.agent, n.source,
+                        -bm25(notes_fts, 0.0, 5.0, 2.0, 1.0) AS s,
+                        snippet(notes_fts, 3, '[', ']', '...', 18)
+                 FROM notes_fts f JOIN notes n ON n.path = f.path
+                 WHERE notes_fts MATCH ? AND n.project IN (?, '', 'global') ORDER BY s DESC LIMIT ?"
+            ).map_err(|e| e.to_string())?;
 
-            let snippet_clean = snip.split_whitespace().collect::<Vec<_>>().join(" ");
-            hits.push(Hit {
-                path,
-                title,
-                project: proj,
-                r#type: ntype,
-                status,
-                updated,
-                agent,
-                source,
-                score: (score * 1000.0).round() / 1000.0,
-                snippet: snippet_clean,
-            });
+            let rows = stmt.query_map(params![match_expr, project, fetch_limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, f64>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            }).map_err(|e| e.to_string())?;
+
+            for r in rows.flatten() {
+                let (path, title, proj, ntype, status, updated, agent, source, mut score, snip) = r;
+                score *= type_prior(&ntype) * status_prior(&status);
+                if proj == project {
+                    score *= PROJECT_BOOST;
+                }
+                let snippet_clean = snip.split_whitespace().collect::<Vec<_>>().join(" ");
+                hits.push(Hit {
+                    path,
+                    title,
+                    project: proj,
+                    r#type: ntype,
+                    status,
+                    updated,
+                    agent,
+                    source,
+                    score: (score * 1000.0).round() / 1000.0,
+                    snippet: snippet_clean,
+                });
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                "SELECT f.path, n.title, n.project, n.type, n.status, n.updated, n.agent, n.source,
+                        -bm25(notes_fts, 0.0, 5.0, 2.0, 1.0) AS s,
+                        snippet(notes_fts, 3, '[', ']', '...', 18)
+                 FROM notes_fts f JOIN notes n ON n.path = f.path
+                 WHERE notes_fts MATCH ? ORDER BY s DESC LIMIT ?"
+            ).map_err(|e| e.to_string())?;
+
+            let rows = stmt.query_map(params![match_expr, fetch_limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, f64>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            }).map_err(|e| e.to_string())?;
+
+            for r in rows.flatten() {
+                let (path, title, proj, ntype, status, updated, agent, source, mut score, snip) = r;
+                score *= type_prior(&ntype) * status_prior(&status);
+                if !project.is_empty() && proj == project {
+                    score *= PROJECT_BOOST;
+                }
+                let snippet_clean = snip.split_whitespace().collect::<Vec<_>>().join(" ");
+                hits.push(Hit {
+                    path,
+                    title,
+                    project: proj,
+                    r#type: ntype,
+                    status,
+                    updated,
+                    agent,
+                    source,
+                    score: (score * 1000.0).round() / 1000.0,
+                    snippet: snippet_clean,
+                });
+            }
         }
 
         hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));

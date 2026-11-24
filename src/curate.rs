@@ -150,8 +150,9 @@ pub fn run_curate(
         }
     }
 
-    // Zero-hit queries from miner
-    let gaps = crate::miner::scan_ledger_gaps(ledger_path);
+    // Zero-hit queries from miner filtered by target project
+    let target_project = if scope == "global" { None } else { Some(scope) };
+    let gaps = crate::miner::scan_ledger_gaps(ledger_path, target_project);
     let top_misses: Vec<String> = gaps.iter().take(15).map(|(q, _)| q.clone()).collect();
 
     let system_prompt = "You are the hive intelligence curator. Analyze the given ACE playbook and recent query telemetry. Propose high-signal playbook consolidations (paraphrase merges), flag contradictory bullets, check for stale architectural drift, and propose query aliases. Conform strictly to the JSON schema.";

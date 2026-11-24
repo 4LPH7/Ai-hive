@@ -499,19 +499,28 @@ pub fn install_skill(
         None => return Err("npx not found on PATH; cannot install skill".to_string()),
     };
 
-    if let Err(e) = fs::create_dir_all(&dest_dir) {
-        return Err(format!("failed to create skill directory: {}", e));
+    let staging_base = std::env::temp_dir().join(format!(
+        "hive-skill-stage-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let staging_dir = staging_base.join("skill");
+    if let Err(e) = fs::create_dir_all(&staging_dir) {
+        return Err(format!("failed to create staging directory: {}", e));
     }
 
     let mut child = match std::process::Command::new(npx_bin)
-        .args(&["--yes", "skills", "add", package_name, "--dest", &dest_dir.display().to_string()])
+        .args(&["--yes", "skills", "add", package_name, "--dest", &staging_dir.display().to_string()])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
     {
         Ok(c) => c,
         Err(e) => {
-            let _ = fs::remove_dir_all(&dest_dir);
+            let _ = fs::remove_dir_all(&staging_base);
             return Err(format!("failed to run npx skills add: {}", e));
         }
     };
@@ -524,13 +533,13 @@ pub fn install_skill(
             Ok(None) => {
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
-                    let _ = fs::remove_dir_all(&dest_dir);
+                    let _ = fs::remove_dir_all(&staging_base);
                     return Err("npx skills add timed out after 30s".to_string());
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(e) => {
-                let _ = fs::remove_dir_all(&dest_dir);
+                let _ = fs::remove_dir_all(&staging_base);
                 return Err(format!("error waiting on npx skills add: {}", e));
             }
         }
@@ -539,19 +548,39 @@ pub fn install_skill(
     if let Some(s) = status {
         if !s.success() {
             let stderr = child.wait_with_output().map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_default();
-            let _ = fs::remove_dir_all(&dest_dir);
+            let _ = fs::remove_dir_all(&staging_base);
             return Err(format!("skills add failed: {}", stderr.trim()));
         }
     } else {
-        let _ = fs::remove_dir_all(&dest_dir);
+        let _ = fs::remove_dir_all(&staging_base);
         return Err("skills add process failed to execute".to_string());
     }
 
-    let (is_safe, reason) = audit_skill_safety(&dest_dir);
+    let (is_safe, reason) = audit_skill_safety(&staging_dir);
     if !is_safe {
-        let _ = fs::remove_dir_all(&dest_dir);
+        let _ = fs::remove_dir_all(&staging_base);
         return Err(format!("Security audit failed: {}", reason.unwrap_or_default()));
     }
+
+    // Staging and audit passed; copy files into dest_dir safely
+    if let Err(e) = fs::create_dir_all(&dest_dir) {
+        let _ = fs::remove_dir_all(&staging_base);
+        return Err(format!("failed to create skill directory: {}", e));
+    }
+
+    for entry in walkdir::WalkDir::new(&staging_dir).into_iter().flatten() {
+        if entry.file_type().is_file() {
+            let p = entry.path();
+            if let Ok(rel) = p.strip_prefix(&staging_dir) {
+                let target_p = dest_dir.join(rel);
+                if let Some(parent) = target_p.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let _ = fs::copy(p, target_p);
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&staging_base);
 
     // Pin package with SHA-256 tree hash in .skill-lock.json
     use sha2::{Digest, Sha256};

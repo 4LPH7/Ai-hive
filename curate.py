@@ -107,7 +107,8 @@ def run_curate(ledger_path=None, vault_path=None, project=None, dry_run=False):
             known_bullet_ids.add(b["id"])
             playbook_summary.append(f"- [{b['id']}] (seen={b.get('seen', 1)}, +{b['helpful']}, -{b['harmful']}) {b['content']}")
 
-    gaps = miner.scan_ledger_gaps(ledger_p)
+    target_project = project if scope != "global" else None
+    gaps = miner.scan_ledger_gaps(ledger_p, project=target_project)
     top_misses = [q for q, _ in gaps[:15]]
 
     system_prompt = (

@@ -298,12 +298,21 @@ class Index:
         if not terms:
             return []
         match = " OR ".join(f'"{t}"' for t in terms)
-        rows = self.db.execute("""
-            SELECT f.path, n.title, n.project, n.type, n.status, n.updated, n.agent, n.source,
-                   -bm25(notes_fts, 0.0, 5.0, 2.0, 1.0) AS s,
-                   snippet(notes_fts, 3, '[', ']', '...', 18)
-            FROM notes_fts f JOIN notes n ON n.path = f.path
-            WHERE notes_fts MATCH ? ORDER BY s DESC LIMIT ?""", (match, limit * 4)).fetchall()
+        if scope == "project" and project:
+            rows = self.db.execute("""
+                SELECT f.path, n.title, n.project, n.type, n.status, n.updated, n.agent, n.source,
+                       -bm25(notes_fts, 0.0, 5.0, 2.0, 1.0) AS s,
+                       snippet(notes_fts, 3, '[', ']', '...', 18)
+                FROM notes_fts f JOIN notes n ON n.path = f.path
+                WHERE notes_fts MATCH ? AND n.project IN (?, '', 'global')
+                ORDER BY s DESC LIMIT ?""", (match, project, limit * 4)).fetchall()
+        else:
+            rows = self.db.execute("""
+                SELECT f.path, n.title, n.project, n.type, n.status, n.updated, n.agent, n.source,
+                       -bm25(notes_fts, 0.0, 5.0, 2.0, 1.0) AS s,
+                       snippet(notes_fts, 3, '[', ']', '...', 18)
+                FROM notes_fts f JOIN notes n ON n.path = f.path
+                WHERE notes_fts MATCH ? ORDER BY s DESC LIMIT ?""", (match, limit * 4)).fetchall()
         hits = []
         for path, title, proj, ntype, status, updated, agent, source, score, snip in rows:
             if scope == "project" and project and proj not in (project, "", "global"):
@@ -626,8 +635,7 @@ def graph_freshness(d, g):
 
 def tool_search(query, project="", scope=None, limit=8):
     if scope is None:
-        print("hive_search: warning: 'scope' parameter omitted, defaulting to 'all'. In v2.0 this will be required.", file=sys.stderr)
-        scope = "all"
+        scope = "project" if project else "all"
     if scope not in ("project", "all"):
         raise ValueError(f"invalid scope {scope!r}; must be 'project' or 'all'")
     t0 = time.time()

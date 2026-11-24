@@ -618,7 +618,9 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                 "hive_search" => {
                     let query = tool_args.get("query").and_then(|v| v.as_str()).unwrap_or("");
                     let project = tool_args.get("project").and_then(|v| v.as_str()).unwrap_or("");
-                    let scope = tool_args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
+                    let scope = tool_args.get("scope").and_then(|v| v.as_str()).unwrap_or_else(|| {
+                        if !project.is_empty() { "project" } else { "all" }
+                    });
                     let limit = tool_args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
                     match idx.search(query, project, limit, scope) {
                         Ok(hits) => {
