@@ -52,13 +52,22 @@ def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_ledger=None,
                 break
     if config_file and config_file.is_file():
         try:
+            prefix = ""
             for line in config_file.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
-                if not line or line.startswith(("#", "[")):
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    sec = line[1:-1].strip().lower()
+                    prefix = f"{sec}." if sec and sec != "hive" else ""
                     continue
                 k, sep, v = line.partition("=")
                 if sep:
-                    config_data[k.strip().lower()] = v.strip().strip("'\"")
+                    raw_k = k.strip().lower()
+                    val = v.strip().strip("'\"")
+                    if prefix:
+                        config_data[f"{prefix}{raw_k}"] = val
+                    config_data.setdefault(raw_k, val)
         except OSError:
             pass
 
@@ -1174,6 +1183,32 @@ def tool_mine(*args):
     return "\n".join(lines)
 
 
+def tool_curate(*args):
+    import argparse
+    import curate
+    cfg = load_config()
+    parser = argparse.ArgumentParser(prog="hive curate")
+    parser.add_argument("--project")
+    parser.add_argument("--dry-run", action="store_true")
+    parsed = parser.parse_args(args)
+    res = curate.run_curate(
+        ledger_path=cfg["ledger"],
+        vault_path=cfg["vault"],
+        project=parsed.project,
+        dry_run=parsed.dry_run,
+    )
+    if res.get("skipped"):
+        return f"curate: {res.get('model')} ({res.get('reason')})"
+    lines = [
+        f"curate: model={res['model']} merges={res['merges_count']} "
+        f"contradictions={res['contradictions_count']} drifts={res['adr_drifts_count']} "
+        f"aliases={res['alias_proposals_count']} (dry_run={res['dry_run']})"
+    ]
+    if res.get("proposal_file"):
+        lines.append(f"  proposal written to: {res['proposal_file']}")
+    return "\n".join(lines)
+
+
 def main(argv):
     cmd, *rest = argv or ["serve"]
     if cmd == "serve":
@@ -1182,7 +1217,7 @@ def main(argv):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine,
+        "mine": tool_mine, "curate": tool_curate,
     }
     if cmd not in commands:
         print(__doc__)

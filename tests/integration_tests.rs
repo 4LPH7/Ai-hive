@@ -270,3 +270,214 @@ fn test_skill_02_rust_audit_safety_trojan_and_injection() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_score_session_rust_success_and_failure() {
+    let tmp = std::env::temp_dir().join(format!("hive_score_test_{}", std::process::id()));
+    let vault = tmp.join("vault");
+    let proj_dir = vault.join("projects").join("ai-hive");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+
+    let playbook = proj_dir.join("playbook.md");
+    let content = "---\ntype: note\nproject: ai-hive\nstatus: active\n---\n# Playbook: ai-hive\n\n## strategies\n- [str-00001] seen=1 helpful=0 harmful=0 :: Test first\n\n## pitfalls\n- [pit-00001] seen=2 helpful=1 harmful=0 :: Avoid breakage\n\n## commands\n\n## conventions\n";
+    std::fs::write(&playbook, content).unwrap();
+
+    let ledger = tmp.join("ledger.jsonl");
+
+    // Record session
+    ai_hive::ledger::record(
+        &ledger,
+        "context",
+        "ai-hive",
+        "solve problem",
+        &[],
+        &["str-00001".to_string()],
+        10.0,
+        Some("antigravity"),
+        Some("session-rust-1"),
+    );
+
+    // Score success
+    let res = ai_hive::ledger::score_session(&ledger, &vault, Some("session-rust-1"), 0, None, None).unwrap();
+    assert!(res.scored);
+    assert_eq!(res.reward, 1);
+    assert_eq!(res.bullets, vec!["str-00001".to_string()]);
+
+    let sections = ai_hive::ace::load(&vault, "ai-hive").unwrap();
+    let b = sections["strategies"].iter().find(|b| b.id == "str-00001").unwrap();
+    assert_eq!(b.helpful, 1);
+    assert_eq!(b.harmful, 0);
+
+    // Score failure on another session
+    ai_hive::ledger::record(
+        &ledger,
+        "context",
+        "ai-hive",
+        "fail problem",
+        &[],
+        &["pit-00001".to_string()],
+        10.0,
+        Some("antigravity"),
+        Some("session-rust-2"),
+    );
+
+    let res_fail = ai_hive::ledger::score_session(&ledger, &vault, Some("session-rust-2"), 1, None, None).unwrap();
+    assert!(res_fail.scored);
+    assert_eq!(res_fail.reward, -1);
+
+    let sections2 = ai_hive::ace::load(&vault, "ai-hive").unwrap();
+    let b2 = sections2["pitfalls"].iter().find(|b| b.id == "pit-00001").unwrap();
+    assert_eq!(b2.helpful, 1);
+    assert_eq!(b2.harmful, 1);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_miner_rust_clusters_and_proposals() {
+    let tmp = std::env::temp_dir().join(format!("hive_miner_test_{}", std::process::id()));
+    let vault = tmp.join("vault");
+    let ledger = tmp.join("ledger.jsonl");
+
+    // Zero-hit query 1
+    ai_hive::ledger::record(
+        &ledger,
+        "query",
+        "ai-hive",
+        "redis cache configuration",
+        &[],
+        &[],
+        5.0,
+        Some("claude"),
+        Some("s1"),
+    );
+
+    // Zero-hit query 2 (similar)
+    ai_hive::ledger::record(
+        &ledger,
+        "query",
+        "ai-hive",
+        "configure redis cache cluster",
+        &[],
+        &[],
+        5.0,
+        Some("antigravity"),
+        Some("s2"),
+    );
+
+    // Query with hits (not a gap)
+    ai_hive::ledger::record(
+        &ledger,
+        "query",
+        "ai-hive",
+        "existing note search",
+        &["notes/test.md".to_string()],
+        &[],
+        5.0,
+        Some("antigravity"),
+        Some("s3"),
+    );
+
+    let res = ai_hive::miner::mine_gaps(&ledger, &vault, 2, false).unwrap();
+    assert_eq!(res.total_gaps, 2);
+    assert_eq!(res.proposals_generated, 1);
+
+    let prop = &res.proposals[0];
+    assert_eq!(prop.count, 2);
+    assert!(std::path::Path::new(&prop.file).is_file());
+
+    let content = std::fs::read_to_string(&prop.file).unwrap();
+    assert!(content.contains("type: proposal"));
+    assert!(content.contains("status: inbox"));
+    assert!(content.contains("source: hive-miner"));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_decay_and_adr_staleness_rust() {
+    let tmp = std::env::temp_dir().join(format!("hive_decay_test_{}", std::process::id()));
+    let vault = tmp.join("vault");
+    let proj_dir = vault.join("projects").join("ai-hive");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+
+    let playbook = proj_dir.join("playbook.md");
+    let content = "---\ntype: note\nproject: ai-hive\nstatus: active\nupdated: 2026-11-24\n---\n# Playbook: ai-hive\n\n## strategies\n- [str-00001] seen=12 updated=2026-09-01 helpful=0 harmful=0 :: Stale forgotten rule\n- [str-00002] seen=15 updated=2026-09-01 helpful=2 harmful=0 :: Proven helpful rule\n\n## pitfalls\n\n## commands\n\n## conventions\n";
+    std::fs::write(&playbook, content).unwrap();
+
+    // Trigger apply to run pruning
+    let ops = ai_hive::ace::DeltaOps {
+        add: None,
+        tag: None,
+        remove: None,
+    };
+    let _ = ai_hive::ace::apply_with_lock(&vault, "ai-hive", &ops).unwrap();
+
+    let sections = ai_hive::ace::load(&vault, "ai-hive").unwrap();
+    let remaining_ids: Vec<String> = sections["strategies"].iter().map(|b| b.id.clone()).collect();
+    assert!(!remaining_ids.contains(&"str-00001".to_string()), "Stale bullet str-00001 should be pruned by decay");
+    assert!(remaining_ids.contains(&"str-00002".to_string()), "Helpful bullet str-00002 should be retained");
+
+    // Test ADR staleness check
+    let projects_root = tmp.join("projects");
+    let graphify_out = projects_root.join("ai-hive").join("graphify-out");
+    std::fs::create_dir_all(&graphify_out).unwrap();
+
+    let manifest = serde_json::json!({
+        "symbols": ["PlaybookLock", "score_session"],
+        "deleted_symbols": ["OldSyncWorker"]
+    });
+    std::fs::write(graphify_out.join("manifest.json"), manifest.to_string()).unwrap();
+
+    let adr_text = "---\ntype: adr\nproject: ai-hive\nstatus: active\n---\n# ADR\nReferences `OldSyncWorker` and `UnknownServiceWorker`.\n";
+    let findings = ai_hive::lint::check_adr_staleness("projects/ai-hive/adrs/0001-test.md", adr_text, &projects_root);
+    assert_eq!(findings.len(), 2);
+    assert!(findings.iter().any(|f| f.message.contains("deleted symbol `OldSyncWorker`")));
+    assert!(findings.iter().any(|f| f.message.contains("UnknownServiceWorker")));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_llm_privacy_and_offline_fail_open_rust() {
+    let mut cfg = ai_hive::llm::LlmConfig::default();
+    cfg.default_privacy = "private".to_string();
+    cfg.combos.private = "hive-private".to_string();
+    cfg.combos.fast = "hive-fast".to_string();
+    cfg.combos.deep = "hive-deep".to_string();
+    cfg.project_privacies.insert("offmesh".to_string(), "private".to_string());
+    cfg.project_privacies.insert("open-proj".to_string(), "public".to_string());
+
+    // 1. Private project hard-locked to hive-private
+    assert_eq!(ai_hive::llm::resolve_combo(&cfg, "fast", Some("offmesh")), "hive-private");
+    assert_eq!(ai_hive::llm::resolve_combo(&cfg, "deep", Some("offmesh")), "hive-private");
+    assert_eq!(ai_hive::llm::resolve_combo(&cfg, "private", Some("offmesh")), "hive-private");
+
+    // 2. Public project uses fast/deep
+    assert_eq!(ai_hive::llm::resolve_combo(&cfg, "fast", Some("open-proj")), "hive-fast");
+    assert_eq!(ai_hive::llm::resolve_combo(&cfg, "deep", Some("open-proj")), "hive-deep");
+
+    // 3. Default privacy applies to unknown project
+    assert_eq!(ai_hive::llm::resolve_combo(&cfg, "fast", Some("unknown")), "hive-private");
+
+    // 4. Secret scrubbing test
+    let raw = "Config sk-1234567890abcdef123456 and token ghp_abcdef1234567890abcdef";
+    let scrubbed = ai_hive::ace::scrub_secrets(raw);
+    assert!(!scrubbed.contains("sk-1234567890abcdef123456"));
+    assert!(!scrubbed.contains("ghp_abcdef1234567890abcdef"));
+    assert!(scrubbed.contains("[REDACTED_SECRET]"));
+
+    // 5. Fail-open when offline
+    let tmp = std::env::temp_dir().join(format!("hive_curate_test_{}", std::process::id()));
+    let vault = tmp.join("vault");
+    let ledger = tmp.join("ledger.jsonl");
+    std::fs::create_dir_all(&vault).unwrap();
+
+    // With offline/unreachable port:
+    let res = ai_hive::curate::run_curate(&ledger, &vault, Some("ai-hive"), false, None).unwrap();
+    // Must return Ok with skipped=true (fail-open)
+    assert!(res.skipped);
+    assert!(res.proposal_file.is_none());
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

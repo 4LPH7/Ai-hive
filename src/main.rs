@@ -101,6 +101,13 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Run OmniRoute-backed curation proposing merges and contradiction flags into inbox/
+    Curate {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// ACE playbook curator operations
     Ace {
         #[command(subcommand)]
@@ -289,6 +296,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 for p in res.proposals {
                     println!("  proposal: [{}] \"{}\" (count={}) -> {}", p.hash, p.representative, p.count, p.file);
+                }
+            }
+            Commands::Curate { project, dry_run } => {
+                let res = ai_hive::curate::run_curate(
+                    &cfg.ledger,
+                    &cfg.vault,
+                    project.as_deref(),
+                    dry_run,
+                    None,
+                )?;
+                if res.skipped {
+                    println!("curate: {} ({})", res.model, res.reason.unwrap_or_default());
+                } else {
+                    println!(
+                        "curate: model={} merges={} contradictions={} drifts={} aliases={} (dry_run={})",
+                        res.model, res.merges_count, res.contradictions_count, res.adr_drifts_count, res.alias_proposals_count, res.dry_run
+                    );
+                    if let Some(file) = res.proposal_file {
+                        println!("  proposal written to: {}", file);
+                    }
                 }
             }
             Commands::Ace { cmd } => {

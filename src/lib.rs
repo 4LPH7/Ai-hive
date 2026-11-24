@@ -10,3 +10,5 @@ pub mod bench;
 pub mod ledger;
 pub mod skill;
 pub mod miner;
+pub mod llm;
+pub mod curate;

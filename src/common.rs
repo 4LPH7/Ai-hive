@@ -122,15 +122,31 @@ pub struct HiveConfig {
 
 pub fn parse_toml_config(content: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
+    let mut current_section = String::new();
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('[') {
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let sec = trimmed[1..trimmed.len() - 1].trim().to_lowercase();
+            current_section = if sec.is_empty() || sec == "hive" {
+                String::new()
+            } else {
+                format!("{}.", sec)
+            };
             continue;
         }
         if let Some((k, v)) = trimmed.split_once('=') {
-            let key = k.trim().to_lowercase();
-            let val = v.trim().trim_matches('"').trim_matches('\'').trim();
-            map.insert(key, val.to_string());
+            let raw_k = k.trim().to_lowercase();
+            let val = v.trim().trim_matches('"').trim_matches('\'').trim().to_string();
+            if current_section.is_empty() {
+                map.insert(raw_k, val);
+            } else {
+                let scoped_key = format!("{}{}", current_section, raw_k);
+                map.insert(scoped_key, val.clone());
+                map.entry(raw_k).or_insert(val);
+            }
         }
     }
     map

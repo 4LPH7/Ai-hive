@@ -43,6 +43,10 @@ SECRET_RE = re.compile(
     r"|-----BEGIN [A-Z ]*PRIVATE KEY|(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,})", re.I)
 
 
+def scrub_secrets(text):
+    return SECRET_RE.sub("[REDACTED_SECRET]", text)
+
+
 def is_pid_alive(pid):
     """Check if process with PID is alive (Windows & POSIX)."""
     if pid <= 0:
