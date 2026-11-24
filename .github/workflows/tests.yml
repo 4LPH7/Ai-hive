@@ -5,13 +5,29 @@ on:
   pull_request:
 
 jobs:
-  unittest:
+  unittest-arch:
+    name: unittest (archlinux)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Update pacman keyring and install dependencies
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm --needed git python
+      - uses: actions/checkout@v4
+      - name: Configure safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Run tests (stdlib only, no model downloads)
+        run: python -W error::SyntaxWarning -m unittest -v
+
+  unittest-windows:
+    name: unittest (windows, ${{ matrix.python }})
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        python: ["3.9", "3.10", "3.12"]
-    runs-on: ${{ matrix.os }}
+        python: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,12 +36,27 @@ jobs:
       - name: Run tests (stdlib only, no model downloads)
         run: python -W error::SyntaxWarning -m unittest -v
 
-  rust:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  rust-arch:
+    name: rust (archlinux)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Update pacman keyring and install dependencies
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm --needed git rust
+      - uses: actions/checkout@v4
+      - name: Configure safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Run Rust unit and integration tests
+        run: cargo test --verbose
+      - name: Build release binary
+        run: cargo build --release
+
+  rust-windows:
+    name: rust (windows)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
