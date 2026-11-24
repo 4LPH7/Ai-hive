@@ -1299,6 +1299,9 @@ def main(argv=None):
         except Exception:
             pass
     cmd, *rest = argv or ["serve"]
+    if cmd in ("--version", "-V", "version"):
+        print("hive 2.5.0")
+        return 0
     if cmd == "serve":
         return serve()
     commands = {

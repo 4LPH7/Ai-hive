@@ -14,7 +14,7 @@ jobs:
       - name: Update pacman keyring and install dependencies
         run: |
           pacman -Sy --noconfirm archlinux-keyring
-          pacman -Syu --noconfirm --needed git python python-pip
+          pacman -Syu --noconfirm --needed git python python-pip python-setuptools
       - uses: actions/checkout@v4
       - name: Configure safe directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -22,7 +22,7 @@ jobs:
         run: python -W error::SyntaxWarning -m unittest -v
       - name: Packaging smoke test
         run: |
-          pip install --no-deps .
+          pip install --no-deps --break-system-packages .
           python -m hive --version
 
   unittest-windows:
