@@ -19,3 +19,17 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Run tests (stdlib only, no model downloads)
         run: python -W error::SyntaxWarning -m unittest -v
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run Rust unit and integration tests
+        run: cargo test --verbose
+      - name: Build release binary
+        run: cargo build --release

@@ -4,4 +4,5 @@ __pycache__/
 *.sqlite
 *.sqlite-*
 .venv/
+target/
 eval_golden.json
