@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub fn default_ledger_path() -> PathBuf {
+    crate::common::load_config(None, None, None, None).ledger
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LedgerEntry {

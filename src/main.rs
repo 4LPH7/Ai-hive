@@ -82,6 +82,14 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Auto-select best skill for task, or discover and install from remote registry
+    Skill {
+        task: String,
+        #[arg(long, default_value = "true", action = clap::ArgAction::Set)]
+        auto_install: bool,
+        #[arg(long, default_value = "all")]
+        scope: String,
+    },
     /// ACE playbook curator operations
     Ace {
         #[command(subcommand)]
@@ -197,6 +205,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                 }
+            }
+            Commands::Skill { task, auto_install, scope } => {
+                let res = ai_hive::mcp::tool_skill(&task, auto_install, &scope)?;
+                println!("{}", res);
             }
             Commands::Ace { cmd } => {
                 let vault = cfg.vault;

@@ -336,8 +336,10 @@ pub fn apply(
     // 1. Process TAG
     if let Some(tags) = &ops.tag {
         for t in tags {
+            let mut found = false;
             for bullets in sections.values_mut() {
                 if let Some(b) = bullets.iter_mut().find(|b| b.id == t.id) {
+                    found = true;
                     if let Some(h) = t.helpful {
                         b.helpful += h;
                         changed += 1;
@@ -347,6 +349,12 @@ pub fn apply(
                         changed += 1;
                     }
                 }
+            }
+            if !found && t.id.starts_with("skill:") {
+                let tag_str = if t.helpful.unwrap_or(0) > 0 { "helpful" } else { "harmful" };
+                let skill_name = &t.id[6..];
+                let _ = crate::ledger::record(&crate::ledger::default_ledger_path(), "skill_feedback", skill_name, tag_str, &[], &[], 0.0, None, None);
+                changed += 1;
             }
         }
     }

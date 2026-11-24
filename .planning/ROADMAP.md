@@ -61,6 +61,10 @@ Plans:
 ### Phase 5: Auto-Skill Discovery, Selection & Dynamic Installation Engine (v2.1)
 **Goal**: Automatically select the best installed skill for any agent task, and dynamically discover, install, and inject missing skills from registries like `find-skills` (`npx skills`).
 **Requirements**: [SKILL-INDEX, SKILL-MATCH, SKILL-RESOLVE, SKILL-FIND, SKILL-INSTALL, SKILL-LOAD, HIVE-TOOL, ACE-LINK]
+Plans:
+- [x] 05-01: Multi-Root Skill Scanner & Intent Matcher
+- [x] 05-02: Remote Discovery (`find-skills`) & Safe Dynamic Installation
+- [x] 05-03: MCP Tool (`hive_skill`), CLI Router & ACE Telemetry
 **Success Criteria**:
 1. Skill Indexer discovers and indexes skills across Antigravity, Codex, Claude Code, and project `.agent/skills`.
 2. Skill Matcher ranks local skills against agent task intent with confidence thresholding.

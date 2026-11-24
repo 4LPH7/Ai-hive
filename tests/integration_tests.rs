@@ -208,3 +208,41 @@ fn test_ledger_01_rust_record_and_read() {
     let _ = std::fs::remove_file(&tmp);
     let _ = std::fs::remove_dir_all(&bad_dir);
 }
+
+#[test]
+fn test_skill_01_rust_handle_rpc_hive_skill() {
+    let mut idx = ai_hive::index::Index::in_memory().unwrap();
+
+    // 1. Missing task argument -> error
+    let bad_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "hive_skill",
+            "arguments": {}
+        }
+    });
+    let bad_resp = ai_hive::mcp::handle_rpc(&mut idx, &bad_req).unwrap();
+    assert!(bad_resp["result"]["isError"].as_bool().unwrap());
+    assert!(bad_resp["result"]["content"][0]["text"].as_str().unwrap().contains("missing required argument 'task'"));
+
+    // 2. Local skill match
+    let tmp = std::env::temp_dir().join(format!("hive_mcp_skill_test_{}", std::process::id()));
+    let skill_dir = tmp.join(".agent").join("skills").join("docker-debugger");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    let skill_file = skill_dir.join("SKILL.md");
+    std::fs::write(&skill_file, "---\nname: docker-debugger\ndescription: Debug docker container issues and compose failures\ntriggers:\n  - docker error\n---\n# Docker Debugger\nAlways inspect logs first.\n").unwrap();
+
+    let custom_roots = vec![(tmp.join(".agent").join("skills"), "custom".to_string())];
+    let skills = ai_hive::skill::scan_skills(Some(&custom_roots));
+    let matched = ai_hive::skill::match_skill("we have a docker error in compose", &skills, 0.65);
+    assert!(matched.is_match);
+    assert_eq!(matched.skill.as_ref().unwrap().name, "docker-debugger");
+
+    let ctx = ai_hive::skill::load_skill_context(std::path::Path::new(&matched.skill.unwrap().path));
+    assert!(ctx.contains("Docker Debugger"));
+    assert!(ctx.contains("Active Agent Skill: docker-debugger"));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -831,6 +831,59 @@ def tool_context(project, task="", budget=1500):
     return pack(sections, budget=int(budget), weights=DEFAULT_SECTION_WEIGHTS)
 
 
+def tool_skill(task, auto_install=True, scope="all"):
+    """Auto-select best skill for task, or discover and install from remote registry (find-skills)."""
+    import skill
+    import ledger
+
+    t0 = time.time()
+    task_str = str(task).strip()
+    if not task_str:
+        return "task description cannot be empty"
+
+    auto_install_bool = str(auto_install).lower() in ("true", "1", "yes") if isinstance(auto_install, (str, int)) else bool(auto_install)
+    scope_str = str(scope or "all").lower()
+
+    # 1. Match local skills
+    match_res = skill.match_skill(task_str, threshold=0.65)
+    duration_ms = (time.time() - t0) * 1000.0
+
+    if match_res.is_match:
+        ctx = skill.load_skill_context(match_res.skill)
+        try:
+            ledger.record(LEDGER_PATH, event="skill", project=match_res.skill.name, query=task_str, hits=[match_res.skill.path], duration_ms=duration_ms)
+        except Exception:
+            pass
+        return ctx
+
+    # 2. Local miss -> remote discovery
+    if scope_str == "all":
+        candidates = skill.find_remote_skills(task_str)
+        if candidates and auto_install_bool:
+            top = candidates[0]
+            res = skill.install_skill(top.package_name)
+            if res.get("status") == "installed":
+                ctx = skill.load_skill_context(res["installed_path"])
+                try:
+                    ledger.record(LEDGER_PATH, event="skill", project=top.package_name, query=task_str, hits=[res["installed_path"]], duration_ms=(time.time() - t0) * 1000.0)
+                except Exception:
+                    pass
+                return f"> [!NOTE] Automatically installed skill `{top.package_name}` from registry\n\n" + ctx
+            elif res.get("status") == "dry_run":
+                return f"> [!NOTE] Dry-run install would stage `{top.package_name}` to {res.get('installed_path')}"
+            else:
+                return f"> [!WARNING] Auto-install failed for {top.package_name}: {res.get('error', 'unknown error')}"
+
+        if candidates and not auto_install_bool:
+            lines = [f"No matching local skill for task: {task_str!r}. Top remote candidates:"]
+            for c in candidates[:3]:
+                lines.append(f"- `{c.package_name}` ({c.stars} stars): {c.description}")
+            lines.append(f"\nTo install: npx skills add {candidates[0].package_name}")
+            return "\n".join(lines)
+
+    return f"no local or remote skills found matching task: {task_str!r}"
+
+
 def tool_lint():
     lint = sibling("lint")  # lint imports hive, so load it lazily
     return lint.format_report(lint.lint(VAULT))
@@ -877,6 +930,12 @@ TOOLS = {
                   "Vault health against AGENTS.md rules: frontmatter, line caps, broken links, stale memory, "
                   "superseded ADRs without successor, ambiguous names, orphans. Run before session end after writing notes.",
                   {}, []),
+    "hive_skill": (tool_skill,
+                   "Auto-select best skill for task, or discover and install from remote registry (find-skills).",
+                   {"task": ("string", "Task description or user prompt (required)"),
+                    "auto_install": ("boolean", "Whether to auto-install missing skills from registry (default: true)"),
+                    "scope": ("string", "Search scope: 'local' (installed only) or 'all' (local + remote fallback, default: 'all')")},
+                   ["task"]),
 }
 
 def tool_list():
@@ -1046,7 +1105,7 @@ def main(argv):
     cmd, *rest = argv or ["serve"]
     if cmd == "serve":
         return serve()
-    commands = {"search": tool_search, "graph": tool_graph, "context": tool_context, "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval, "ledger": tool_ledger}
+    commands = {"search": tool_search, "graph": tool_graph, "context": tool_context, "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval, "ledger": tool_ledger, "skill": tool_skill}
     if cmd not in commands:
         print(__doc__)
         return 2

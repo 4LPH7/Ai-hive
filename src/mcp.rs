@@ -100,6 +100,21 @@ pub fn tool_list() -> Value {
             },
             "annotations": read_only
         }),
+        json!({
+            "name": "hive_skill",
+            "description": "Auto-select best skill for task, or discover and install from remote registry (find-skills).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["task"],
+                "properties": {
+                    "task": {"type": "string", "description": "Task description or user prompt (required)"},
+                    "auto_install": {"type": "boolean", "description": "Whether to auto-install missing skills from registry (default: true)"},
+                    "scope": {"type": "string", "description": "Search scope: 'local' (installed only) or 'all' (local + remote fallback, default: 'all')"}
+                },
+                "additionalProperties": false
+            },
+            "annotations": read_only
+        }),
     ];
 
     json!(tools)
@@ -213,6 +228,36 @@ pub fn validate_tool_args(name: &str, args: &Value) -> Result<(), String> {
             if !obj.is_empty() {
                 let first_key = obj.keys().next().unwrap();
                 return Err(format!("unexpected argument {:?}; allowed: []", first_key));
+            }
+        }
+        "hive_skill" => {
+            if !obj.contains_key("task") || obj["task"].is_null() {
+                return Err("missing required argument 'task'".to_string());
+            }
+            for (k, v) in obj {
+                match k.as_str() {
+                    "task" => {
+                        if !v.is_string() {
+                            return Err("argument 'task' must be string".to_string());
+                        }
+                    }
+                    "auto_install" => {
+                        if !v.is_boolean() {
+                            return Err("argument 'auto_install' must be boolean".to_string());
+                        }
+                    }
+                    "scope" => {
+                        if !v.is_string() {
+                            return Err("argument 'scope' must be string".to_string());
+                        }
+                    }
+                    other => {
+                        return Err(format!(
+                            "unexpected argument {:?}; allowed: [\"auto_install\", \"scope\", \"task\"]",
+                            other
+                        ));
+                    }
+                }
             }
         }
         other => return Err(format!("unknown tool {:?}", other)),
@@ -426,6 +471,77 @@ pub fn tool_context(
     Ok(pack(&sections, budget))
 }
 
+pub fn tool_skill(task: &str, auto_install: bool, scope: &str) -> Result<String, String> {
+    let t0 = std::time::Instant::now();
+    let task_str = task.trim();
+    if task_str.is_empty() {
+        return Ok("task description cannot be empty".to_string());
+    }
+
+    let skills = crate::skill::scan_skills(None);
+    let match_res = crate::skill::match_skill(task_str, &skills, 0.65);
+    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    if match_res.is_match {
+        if let Some(s) = match_res.skill {
+            let p = Path::new(&s.path);
+            let ctx = crate::skill::load_skill_context(p);
+            let _ = crate::ledger::record(
+                &crate::ledger::default_ledger_path(),
+                "skill",
+                &s.name,
+                task_str,
+                &[s.path.clone()],
+                &[],
+                dur_ms,
+                None,
+                None,
+            );
+            return Ok(ctx);
+        }
+    }
+
+    if scope == "all" {
+        let candidates = crate::skill::find_remote_skills(task_str);
+        if !candidates.is_empty() && auto_install {
+            let top = &candidates[0];
+            match crate::skill::install_skill(&top.package_name, None, false) {
+                Ok(installed_path) => {
+                    let ctx = crate::skill::load_skill_context(&installed_path);
+                    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    let _ = crate::ledger::record(
+                        &crate::ledger::default_ledger_path(),
+                        "skill",
+                        &top.package_name,
+                        task_str,
+                        &[installed_path.display().to_string()],
+                        &[],
+                        dur_ms,
+                        None,
+                        None,
+                    );
+                    return Ok(format!(
+                        "> [!NOTE] Automatically installed skill `{}` from registry\n\n{}",
+                        top.package_name, ctx
+                    ));
+                }
+                Err(err) => {
+                    return Ok(format!("> [!WARNING] Auto-install failed for {}: {}", top.package_name, err));
+                }
+            }
+        } else if !candidates.is_empty() && !auto_install {
+            let mut lines = vec![format!("No matching local skill for task: {:?}. Top remote candidates:", task_str)];
+            for c in candidates.iter().take(3) {
+                lines.push(format!("- `{}` ({} stars): {}", c.package_name, c.stars, c.description));
+            }
+            lines.push(format!("\nTo install: npx skills add {}", candidates[0].package_name));
+            return Ok(lines.join("\n"));
+        }
+    }
+
+    Ok(format!("no local or remote skills found matching task: {:?}", task_str))
+}
+
 pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
     let id = req.get("id");
     let method = req.get("method")?.as_str()?;
@@ -535,6 +651,12 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                 "hive_lint" => {
                     let findings = lint(&idx.vault, None);
                     Ok(format_report(&findings))
+                }
+                "hive_skill" => {
+                    let task = tool_args.get("task").and_then(|v| v.as_str()).unwrap_or("");
+                    let auto_install = tool_args.get("auto_install").and_then(|v| v.as_bool()).unwrap_or(true);
+                    let scope = tool_args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
+                    tool_skill(task, auto_install, scope)
                 }
                 other => Err(format!("tool {:?} not found", other)),
             };

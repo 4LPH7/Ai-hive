@@ -24,6 +24,13 @@ High-performance, deterministic memory retrieval and playbook curation with Mark
 - ✓ **LOCK-01**: Atomic `O_EXCL` file locking with stale-lock expiration for concurrent ACE merges [Milestone 3 - F9]
 - ✓ **LEDG-01**: Local JSONL session ledger outside vault tracking queries, hits, and injected bullets [Milestone 3]
 - ✓ **HOOK-01**: Cross-agent reflection parity (fail-open Codex stop-hook & Antigravity ledger sync) [Milestone 3]
+- ✓ **SKILL-01**: Multi-root cross-agent skill scanner (Antigravity, Codex, Claude Code, project) [Milestone 5]
+- ✓ **SKILL-02**: Intent-based skill matcher with prefix-stemming & confidence thresholding (0.65) [Milestone 5]
+- ✓ **SKILL-03**: Remote registry discovery (`find-skills` / `npx skills find`) with graceful fallback [Milestone 5]
+- ✓ **SKILL-04**: Safe dynamic skill auto-installation with security audit gate & atomic rollback [Milestone 5]
+- ✓ **SKILL-05**: Context & instruction injection formatter (`> [!NOTE] Active Agent Skill...`) [Milestone 5]
+- ✓ **SKILL-06**: MCP stdio tool `hive_skill` & CLI router `hive skill` with dual-engine parity [Milestone 5]
+- ✓ **SKILL-07**: ACE playbook telemetry & reinforcement feedback link (`skill_feedback`) [Milestone 5]
 
 ### Active
 - [ ] **CI-01**: GitHub Actions matrix running Rust and Python test suites on Ubuntu and Windows [Milestone 2 - F16]

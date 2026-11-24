@@ -241,6 +241,15 @@ def apply_ops(sections, ops):
             if b and tag in ("helpful", "harmful"):
                 b[tag] += 1
                 report["tagged"] += 1
+            elif str(op.get("id", "")).startswith("skill:") and tag in ("helpful", "harmful"):
+                report["tagged"] += 1
+                try:
+                    import ledger, hive
+                    cfg = hive.load_config()
+                    skill_name = str(op.get("id"))[6:]
+                    ledger.record(cfg["ledger"], event="skill_feedback", project=skill_name, query=tag, hits=[], duration_ms=0.0)
+                except Exception:
+                    pass
             continue
         if kind != "ADD":
             report["rejected"].append(f"unknown op {op!r:.60}")
