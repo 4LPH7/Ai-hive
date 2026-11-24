@@ -48,7 +48,8 @@ class LintTest(unittest.TestCase):
         self.assertEqual(codes(self.run_lint()), [])
 
     def test_utf8_bom_does_not_hide_frontmatter(self):
-        path = note(self.root, "projects/demo/bom.md")
+        note(self.root, "projects/demo/bom.md")
+        path = self.root / "projects/demo/bom.md"
         path.write_text("\ufeff" + path.read_text(encoding="utf-8"), encoding="utf-8")
         self.assertNotIn("frontmatter-missing", codes(self.run_lint(), "projects/demo/bom.md"))
 
