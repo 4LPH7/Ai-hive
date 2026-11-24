@@ -762,12 +762,12 @@ def handle(msg):
             text = fn(**args)
             return ok({"content": [{"type": "text", "text": text}], "isError": False})
         except (ValueError, TypeError) as exc:
-            return ok({"content": [{"type": "text", "text": f"invalid {name} arguments: {exc}"}],
-                       "isError": True, "error": {"code": "INVALID_ARGUMENTS", "message": str(exc)}})
+            return ok({"content": [{"type": "text", "text": f"[INVALID_ARGUMENTS] {name}: {exc}"}],
+                       "isError": True})
         except Exception as exc:
             print(f"hive: {name} failed: {exc!r}", file=sys.stderr)
-            return ok({"content": [{"type": "text", "text": f"hive error: {type(exc).__name__}: {exc}"}],
-                       "isError": True, "error": {"code": "TOOL_FAILURE", "message": str(exc)}})
+            return ok({"content": [{"type": "text", "text": f"[TOOL_FAILURE] {name}: {type(exc).__name__}: {exc}"}],
+                       "isError": True})
     return err(-32601, f"method not found: {method}")
 
 
