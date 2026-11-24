@@ -352,10 +352,12 @@ pub fn tool_context(
         let source = meta.get("source").map(|s| s.as_str()).unwrap_or("unknown");
         let updated = meta.get("updated").map(|s| s.as_str()).unwrap_or("");
         let age = note_age(updated);
-        let framed_body = format!(
-            "<untrusted_vault_note path=\"{}\" agent=\"{}\" source=\"{}\" age=\"{}\">\n{}\n</untrusted_vault_note>",
-            mem_rel, agent, source, age, body.trim()
+        let header = format!(
+            "> [!NOTE] Untrusted vault note: path=\"{}\", agent=\"{}\", source=\"{}\", age=\"{}\"",
+            mem_rel, agent, source, age
         );
+        let quoted_body: Vec<String> = body.trim().lines().map(|l| format!("> {}", l)).collect();
+        let framed_body = format!("{}\n{}", header, quoted_body.join("\n"));
         mem_parts.push(format!("## {} ({})\n{}", mem_rel, age, framed_body));
     } else {
         mem_parts.push(format!("## {}\n(none yet: create it from templates/project-memory.md)", mem_rel));
@@ -500,7 +502,7 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                 "hive_search" => {
                     let query = tool_args.get("query").and_then(|v| v.as_str()).unwrap_or("");
                     let project = tool_args.get("project").and_then(|v| v.as_str()).unwrap_or("");
-                    let scope = tool_args.get("scope").and_then(|v| v.as_str()).unwrap_or("project");
+                    let scope = tool_args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
                     let limit = tool_args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
                     match idx.search(query, project, limit, scope) {
                         Ok(hits) => {

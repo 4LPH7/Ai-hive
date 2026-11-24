@@ -23,8 +23,8 @@ pub const REL_WEIGHT: &[(&str, f64)] = &[
 pub const PPR_RESTART: f64 = 0.15;
 pub const PPR_ITERS: usize = 25;
 pub const PPR_HOPS: usize = 2;
-pub const FORWARD_WEIGHT: f64 = 1.0;
-pub const REVERSE_WEIGHT: f64 = 0.5;
+pub const FORWARD_WEIGHT: f64 = 0.7;
+pub const REVERSE_WEIGHT: f64 = 0.3;
 
 pub fn rel_weight(rel: &str) -> f64 {
     for &(r, w) in REL_WEIGHT {
@@ -340,13 +340,62 @@ impl Graph {
     }
 }
 
+pub fn get_registered_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let config_dir = if cfg!(windows) {
+        std::env::var("APPDATA")
+            .map(|a| PathBuf::from(a).join("hive"))
+            .unwrap_or_else(|_| PathBuf::from(".config/hive"))
+    } else {
+        std::env::var("XDG_CONFIG_HOME")
+            .map(|x| PathBuf::from(x).join("hive"))
+            .unwrap_or_else(|_| {
+                std::env::var("HOME")
+                    .map(|h| PathBuf::from(h).join(".config").join("hive"))
+                    .unwrap_or_else(|_| PathBuf::from(".config/hive"))
+            })
+    };
+    let cfg_file = config_dir.join("roots.toml");
+    if let Ok(content) = fs::read_to_string(cfg_file) {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('"') || trimmed.starts_with('\'') {
+                let p = trimmed.trim_matches(|c| c == '"' || c == '\'' || c == ',');
+                if !p.is_empty() {
+                    roots.push(PathBuf::from(p));
+                }
+            }
+        }
+    }
+    if let Ok(env_roots) = std::env::var("HIVE_ALLOWED_REPOS") {
+        for part in env_roots.split(';') {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                roots.push(PathBuf::from(trimmed));
+            }
+        }
+    }
+    roots.push(default_projects());
+    let mut clean_roots = Vec::new();
+    for r in roots {
+        if let Ok(c) = r.canonicalize() {
+            if c.is_dir() && !clean_roots.contains(&c) {
+                clean_roots.push(c);
+            }
+        }
+    }
+    clean_roots
+}
+
 pub fn repo_dir(repo: &str) -> Option<PathBuf> {
-    let projects = default_projects().canonicalize().ok()?;
+    let roots = get_registered_roots();
     let path = PathBuf::from(repo);
     if path.is_dir() {
         if let Ok(resolved) = path.canonicalize() {
-            if is_relative_to(&resolved, &projects) && resolved.join("graphify-out").is_dir() {
-                return Some(resolved);
+            for root in &roots {
+                if &resolved != root && is_relative_to(&resolved, root) && resolved.join("graphify-out").is_dir() {
+                    return Some(resolved);
+                }
             }
         }
     }
@@ -355,8 +404,8 @@ pub fn repo_dir(repo: &str) -> Option<PathBuf> {
     if !re.is_match(&want) || want == "." || want == ".." {
         return None;
     }
-    if projects.is_dir() {
-        if let Ok(entries) = fs::read_dir(projects) {
+    for root in &roots {
+        if let Ok(entries) = fs::read_dir(root) {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     let name = entry.file_name().to_string_lossy().to_string();

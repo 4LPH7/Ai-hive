@@ -29,6 +29,8 @@ pub fn is_secret(text: &str) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Bullet {
     pub id: String,
+    #[serde(default)]
+    pub seen: i64,
     pub helpful: i64,
     pub harmful: i64,
     pub content: String,
@@ -68,7 +70,7 @@ pub fn parse(text: &str) -> HashMap<String, Vec<Bullet>> {
         sections.insert(name.to_string(), Vec::new());
     }
 
-    let re_line = Regex::new(r"^- \[([a-z]{3}-\d{5})\] helpful=(\d+) harmful=(\d+) :: (.+)$").unwrap();
+    let re_line = Regex::new(r"^- \[([a-z]{3}-\d{5})\] (?:seen=(\d+)\s+)?helpful=(\d+)\s+harmful=(\d+)\s+::\s+(.+)$").unwrap();
     let re_heading = Regex::new(r"^##\s+(\w+)").unwrap();
 
     let mut current_section: Option<String> = None;
@@ -88,11 +90,13 @@ pub fn parse(text: &str) -> HashMap<String, Vec<Bullet>> {
         if let Some(ref sec) = current_section {
             if let Some(cap) = re_line.captures(trimmed) {
                 let id = cap[1].to_string();
-                let helpful = cap[2].parse::<i64>().unwrap_or(0);
-                let harmful = cap[3].parse::<i64>().unwrap_or(0);
-                let content = cap[4].trim().to_string();
+                let helpful = cap[3].parse::<i64>().unwrap_or(0);
+                let harmful = cap[4].parse::<i64>().unwrap_or(0);
+                let seen = cap.get(2).and_then(|m| m.as_str().parse::<i64>().ok()).unwrap_or(helpful + harmful);
+                let content = cap[5].trim().to_string();
                 sections.get_mut(sec).unwrap().push(Bullet {
                     id,
+                    seen,
                     helpful,
                     harmful,
                     content,
@@ -119,8 +123,12 @@ pub fn render(scope: &str, sections: &HashMap<String, Vec<Bullet>>, today: &str)
         if let Some(bullets) = sections.get(name) {
             for b in bullets {
                 body.push(format!(
-                    "- [{}] helpful={} harmful={} :: {}",
-                    b.id, b.helpful, b.harmful, b.content
+                    "- [{}] seen={} helpful={} harmful={} :: {}",
+                    b.id,
+                    if b.seen > 0 { b.seen } else { b.helpful + b.harmful },
+                    b.helpful,
+                    b.harmful,
+                    b.content
                 ));
             }
         }
@@ -233,9 +241,9 @@ pub fn apply(
 
             let bullets = sections.get_mut(&sec_name).unwrap();
 
-            // Deduplication via Jaccard
+            // Deduplication via Jaccard: reinforce seen counter, NOT helpful
             if let Some(existing) = bullets.iter_mut().find(|b| jaccard_similarity(&b.content, content) >= DUP_JACCARD) {
-                existing.helpful += 1;
+                existing.seen += 1;
                 changed += 1;
                 continue;
             }
@@ -255,7 +263,8 @@ pub fn apply(
             let new_id = format!("{}-{:05}", prefix, next_num);
             bullets.push(Bullet {
                 id: new_id,
-                helpful: 1,
+                seen: 1,
+                helpful: 0,
                 harmful: 0,
                 content: content.to_string(),
             });
@@ -358,6 +367,7 @@ mod tests {
         };
         apply(&mut sections, &dup_ops).unwrap();
         assert_eq!(sections["strategies"].len(), 1);
-        assert_eq!(sections["strategies"][0].helpful, 2);
+        assert_eq!(sections["strategies"][0].seen, 2);
+        assert_eq!(sections["strategies"][0].helpful, 0);
     }
 }

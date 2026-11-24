@@ -273,9 +273,8 @@ class Milestone1RegressionTest(unittest.TestCase):
                   title="Demo memory", body="Critical project facts.")
             self.idx.refresh(force=True)
             ctx = hive.tool_context("demo")
-            self.assertIn("<untrusted_vault_note", ctx)
-            self.assertIn('path="projects/demo/_memory.md"', ctx)
-            self.assertIn("</untrusted_vault_note>", ctx)
+            self.assertIn('> [!NOTE] Untrusted vault note: path="projects/demo/_memory.md"', ctx)
+            self.assertIn("> Critical project facts.", ctx)
         finally:
             hive.VAULT = old_vault
             hive._INDEX = old_idx

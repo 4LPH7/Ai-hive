@@ -15,8 +15,20 @@ import re
 import sqlite3
 import sys
 import time
+
+if sys.version_info < (3, 9):
+    sys.exit("hive requires Python 3.9+ (Path.is_relative_to)")
+
 from collections import defaultdict
 from pathlib import Path
+
+def canonical_path(p):
+    """Normalize Windows casing, 8.3 short paths and symlinks/junctions."""
+    try:
+        resolved = Path(p).resolve()
+        return Path(os.path.normcase(os.path.realpath(str(resolved))))
+    except (ValueError, OSError):
+        return Path(p)
 
 VAULT = Path(os.environ.get("HIVE_VAULT", r"D:\Valut\OBS"))
 PROJECTS = Path(os.environ.get("HIVE_PROJECTS", r"D:\PROJECTS"))
@@ -32,6 +44,7 @@ AUTOCUT_RATIO = 0.30  # keep hits >= 30% of the best; eval 2026-11-23: 0.35 cut 
 SERVER_INFO = {"name": "hive", "version": "1.1.0"}
 MODERN_VERSIONS = ["2026-07-28"]
 LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+ALL_SUPPORTED_VERSIONS = MODERN_VERSIONS + LEGACY_VERSIONS
 META_VERSION = "io.modelcontextprotocol/protocolVersion"
 INSTRUCTIONS = ("Shared memory for all coding agents (Obsidian vault + graphify graphs). Read-only. "
                 "Call hive_context at the start of a task, hive_search before asking the user for context, "
@@ -41,12 +54,12 @@ INSTRUCTIONS = ("Shared memory for all coding agents (Obsidian vault + graphify 
 READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 LIST_CACHE = {"ttlMs": 3600000, "cacheScope": "public"}  # required on modern tools/list + server/discover
 DEFAULT_SECTION_WEIGHTS = {"memory": 0.35, "playbook": 0.15, "task_notes": 0.25, "code_graph": 0.25}
-FORWARD_WEIGHT = 1.0
-REVERSE_WEIGHT = 0.5
+FORWARD_WEIGHT = float(os.environ.get("HIVE_PPR_FWD", 0.7))
+REVERSE_WEIGHT = float(os.environ.get("HIVE_PPR_REV", 0.3))
 
 
 def est_tokens(text):
-    """Content-aware token estimator: code vs prose + 10% safety margin."""
+    """Calibrated content-aware token estimator: code (3.4) vs prose (4.2) + 8% safety margin."""
     if not text:
         return 0
     code_chars, prose_chars = 0, 0
@@ -61,7 +74,7 @@ def est_tokens(text):
             code_chars += len(line)
         else:
             prose_chars += len(line)
-    toks = (code_chars / 3.0 + prose_chars / 4.0) * 1.1
+    toks = (code_chars / 3.4 + prose_chars / 4.2) * 1.08
     return int(math.ceil(toks))
 
 
@@ -217,10 +230,11 @@ class Index:
 
     def note(self, rel):
         try:
-            path = (self.vault / rel).resolve()
-            if not path.is_relative_to(self.vault.resolve()):
+            target = canonical_path(self.vault / rel)
+            base = canonical_path(self.vault)
+            if not target.is_relative_to(base):
                 return ""
-            return path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else ""
+            return target.read_text(encoding="utf-8-sig", errors="replace") if target.is_file() else ""
         except (ValueError, OSError):
             return ""
 
@@ -255,27 +269,79 @@ def split_ident(text):
     return [p for p in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if len(p) > 1]
 
 
-def repo_dir(repo):
-    """Accept a repo folder path, a folder name under PROJECTS, or a vault slug."""
-    try:
-        projects_root = PROJECTS.resolve()
-    except (ValueError, OSError):
-        return None
-    path = Path(repo)
-    if path.is_dir():
+def get_config_dir():
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "hive"
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg) / "hive"
+    return Path.home() / ".config" / "hive"
+
+
+def get_registered_roots():
+    """Retrieve allowed repository roots from roots.toml, HIVE_ALLOWED_REPOS, and PROJECTS."""
+    roots = []
+    cfg_file = get_config_dir() / "roots.toml"
+    if cfg_file.is_file():
         try:
-            resolved = path.resolve()
-            if resolved.is_relative_to(projects_root) and (resolved / "graphify-out").is_dir():
-                return resolved
-        except (ValueError, OSError):
+            content = cfg_file.read_text(encoding="utf-8")
+            for line in content.splitlines():
+                line = line.strip()
+                if line.startswith(('"', "'")):
+                    p = line.strip('"\' ,')
+                    if p:
+                        roots.append(canonical_path(p))
+                elif "=" in line and ("roots" in line or "path" in line):
+                    _, _, val = line.partition("=")
+                    val = val.strip().strip("[]")
+                    for part in val.split(","):
+                        p = part.strip().strip('"\' ')
+                        if p:
+                            roots.append(canonical_path(p))
+        except OSError:
             pass
-    want = slugify(path.name or str(repo))
+    env_roots = os.environ.get("HIVE_ALLOWED_REPOS")
+    if env_roots:
+        for p in env_roots.split(os.pathsep):
+            if p.strip():
+                roots.append(canonical_path(p.strip()))
+    roots.append(canonical_path(PROJECTS))
+    seen = set()
+    result = []
+    for r in roots:
+        s = str(r)
+        if s not in seen and r.is_dir():
+            seen.add(s)
+            result.append(r)
+    return result
+
+
+def repo_dir(repo):
+    """Accept a repo folder path under registered roots, a folder name under registered roots, or a vault slug."""
+    roots = get_registered_roots()
+    if not roots:
+        return None
+    try:
+        cand = canonical_path(repo)
+        if cand.is_dir():
+            for root in roots:
+                if cand != root and cand.is_relative_to(root) and (cand / "graphify-out").is_dir():
+                    return cand
+    except (ValueError, OSError):
+        pass
+    want = slugify(Path(repo).name or str(repo))
     if not re.fullmatch(r"[a-z0-9._-]+", want) or want in {".", ".."}:
         return None
-    if projects_root.is_dir():
-        for d in projects_root.iterdir():
-            if d.is_dir() and slugify(d.name) == want:
-                return d
+    for root in roots:
+        try:
+            for d in root.iterdir():
+                if d.is_dir() and slugify(d.name) == want:
+                    can = canonical_path(d)
+                    return can
+        except OSError:
+            continue
     return None
 
 
@@ -466,7 +532,10 @@ def graph_freshness(d, g):
     return f"graph built at {g.commit[:8]}"
 
 
-def tool_search(query, project="", scope="project", limit=8):
+def tool_search(query, project="", scope=None, limit=8):
+    if scope is None:
+        print("hive_search: warning: 'scope' parameter omitted, defaulting to 'all'. In v2.0 this will be required.", file=sys.stderr)
+        scope = "all"
     if scope not in ("project", "all"):
         raise ValueError(f"invalid scope {scope!r}; must be 'project' or 'all'")
     slug = validate_slug(project) if project else ""
@@ -615,10 +684,9 @@ def tool_context(project, task="", budget=1500):
         source = meta.get("source", "unknown")
         updated = meta.get("updated", "")
         age = note_age(updated)
-        framed_body = (f'<untrusted_vault_note path="projects/{project}/_memory.md" '
-                       f'agent="{agent}" source="{source}" age="{age}">\n'
-                       f'{body.strip()}\n'
-                       f'</untrusted_vault_note>')
+        header = f"> [!NOTE] Untrusted vault note: path=\"projects/{project}/_memory.md\", agent=\"{agent}\", source=\"{source}\", age=\"{age}\""
+        quoted_lines = [f"> {line}" for line in body.strip().splitlines()]
+        framed_body = header + "\n" + "\n".join(quoted_lines)
         mem_parts.append(f"## projects/{project}/_memory.md ({age})\n{framed_body}")
     else:
         mem_parts.append(f"## projects/{project}/_memory.md\n(none yet: create it from templates/project-memory.md)")
@@ -725,27 +793,33 @@ def tool_list():
 
 
 def validate_tool_args(name, args):
-    """Validate arguments against tool definition. Return list of error strings."""
+    """Validate arguments against tool definition. Return list of error dicts with messages."""
     fn, _, props, req = TOOLS[name]
     if not isinstance(args, dict):
-        return [f"arguments must be a JSON object, got {type(args).__name__}"]
+        return [{"field": "_root", "expected": "object", "got": type(args).__name__,
+                 "message": f"arguments must be a JSON object, got {type(args).__name__}"}]
     errors = []
     for r in req:
         if r not in args or args[r] is None:
-            errors.append(f"missing required argument {r!r}")
+            errors.append({"field": r, "expected": "provided", "got": "missing",
+                           "message": f"missing required argument {r!r}"})
     for k in args:
         if k not in props:
-            errors.append(f"unexpected argument {k!r}; allowed: {sorted(props.keys())}")
+            errors.append({"field": k, "expected": "none", "got": "unexpected",
+                           "message": f"unexpected argument {k!r}; allowed: {sorted(props.keys())}"})
         else:
             expected_type, _ = props[k]
             val = args[k]
             if val is not None:
                 if expected_type == "string" and not isinstance(val, str):
-                    errors.append(f"argument {k!r} must be string, got {type(val).__name__}")
+                    errors.append({"field": k, "expected": "string", "got": type(val).__name__,
+                                   "message": f"argument {k!r} must be string, got {type(val).__name__}"})
                 elif expected_type == "integer" and (isinstance(val, bool) or not isinstance(val, int)):
-                    errors.append(f"argument {k!r} must be integer, got {type(val).__name__}")
+                    errors.append({"field": k, "expected": "integer", "got": type(val).__name__,
+                                   "message": f"argument {k!r} must be integer, got {type(val).__name__}"})
                 elif expected_type == "boolean" and not isinstance(val, bool):
-                    errors.append(f"argument {k!r} must be boolean, got {type(val).__name__}")
+                    errors.append({"field": k, "expected": "boolean", "got": type(val).__name__,
+                                   "message": f"argument {k!r} must be boolean, got {type(val).__name__}"})
     return errors
 
 
@@ -768,7 +842,8 @@ def handle(msg):
         return err(-32022, "Unsupported protocol version", {"supported": MODERN_VERSIONS, "requested": version})
     if method == "initialize":
         asked = params.get("protocolVersion")
-        return ok({"protocolVersion": asked if asked in LEGACY_VERSIONS else LEGACY_VERSIONS[0],
+        chosen = asked if asked in ALL_SUPPORTED_VERSIONS else LEGACY_VERSIONS[0]
+        return ok({"protocolVersion": chosen,
                    "capabilities": {"tools": {}}, "serverInfo": SERVER_INFO, "instructions": INSTRUCTIONS})
     if method == "server/discover":
         return ok({"supportedVersions": MODERN_VERSIONS, "capabilities": {"tools": {}},
@@ -787,8 +862,8 @@ def handle(msg):
         fn, _, props, _ = TOOLS[name]
         arg_errors = validate_tool_args(name, args)
         if arg_errors:
-            error_msg = f"Invalid arguments for {name}: {'; '.join(arg_errors)}"
-            return ok({"content": [{"type": "text", "text": error_msg}], "isError": True})
+            error_msg = f"Invalid arguments for {name}: {'; '.join(e['message'] for e in arg_errors)}"
+            return ok({"content": [{"type": "text", "text": error_msg}], "isError": True, "errorDetails": arg_errors})
         try:
             text = fn(**args)
             return ok({"content": [{"type": "text", "text": text}], "isError": False})

@@ -15,11 +15,20 @@ pub fn validate_slug(name: &str) -> Result<String, String> {
     Ok(s)
 }
 
-pub fn is_relative_to(path: &Path, base: &Path) -> bool {
-    match (path.canonicalize(), base.canonicalize()) {
-        (Ok(p), Ok(b)) => p.starts_with(b),
-        _ => path.starts_with(base),
+pub fn canonical_path(p: &Path) -> PathBuf {
+    match p.canonicalize() {
+        Ok(c) => {
+            let s = c.to_string_lossy().to_lowercase();
+            PathBuf::from(s.trim_start_matches(r"\\?\"))
+        }
+        Err(_) => PathBuf::from(p.to_string_lossy().to_lowercase()),
     }
+}
+
+pub fn is_relative_to(path: &Path, base: &Path) -> bool {
+    let p = canonical_path(path);
+    let b = canonical_path(base);
+    p.starts_with(b)
 }
 
 pub fn est_tokens(text: &str) -> usize {
@@ -48,7 +57,7 @@ pub fn est_tokens(text: &str) -> usize {
         }
     }
 
-    let toks = ((code_chars as f64) / 3.0 + (prose_chars as f64) / 4.0) * 1.1;
+    let toks = ((code_chars as f64) / 3.4 + (prose_chars as f64) / 4.2) * 1.08;
     toks.ceil() as usize
 }
 

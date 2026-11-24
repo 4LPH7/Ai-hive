@@ -1,14 +1,23 @@
 # Changelog
 
+## v1.2.0 (2026-11-24)
+
+- **Rust Standalone Static Binary (`hive.exe`):** Complete migration to Rust (`ai-hive` v1.2.0 crate) with bundled SQLite + FTS5 (`rusqlite 0.31`). Zero runtime dependencies, instant startup (<1 ms).
+- **Tool Parity:** Full implementation of `hive_context`, `hive_search`, `hive_graph`, `hive_status`, `hive_lint`, `ace` CLI subcommands, `eval`, and `bench`.
+- **Graph Performance:** 7.8–32.8 ms Personalized PageRank on graphs up to 3,427 nodes (2-3x faster than Python).
+- **Retrieval Accuracy:** Exact evaluation parity on `eval_golden.json`: Recall@5 = 30/30 (1.00), MRR = 0.848.
+- **CI Matrix:** Multi-platform CI running on Ubuntu and Windows across stable Rust and Python 3.9/3.10/3.12.
+
 ## v1.1.0 (2026-11-24)
 
-- **Security (F3):** Close path traversal in `tool_context` slug validation, `Index.note` canonical vault check (`is_relative_to(VAULT)`), and `repo_dir` root validation against `PROJECTS`.
-- **Context pack (F1, F15):** Quota-based `pack()` with dynamic redistribution across section shares (35% memory, 15% playbook, 25% task notes, 25% code graph) and `omitted_sections` footer; content-aware token estimator (code vs prose + 10% safety margin) preventing large memory notes from starving task notes or graphs.
-- **Isolation (F2):** Strict project isolation in `hive_context` and `hive_search` (default `scope="project"` filters to target project + global; explicit `scope="all"` for cross-project search).
-- **Code graph (F4):** True directed graph storage (`out_adj`, `in_adj`), edges printed in caller -> callee direction, separate forward/reverse transition weights in PPR.
-- **Portability & exact match (F5, F11):** Strip UTF-8 BOM (`utf-8-sig`) in `parse_note` and index reads; exact table cell matching for `active-work.md` preventing substring match collisions.
-- **Provenance & secret gate (F10, F14):** Secret regex enforced as `ERROR` in `lint.py`; `source:` missing on agent notes escalated to `ERROR`; untrusted-data framing (`<untrusted_vault_note>`) with `(agent, source, age)`; pre-commit hook restricted to staged files (`--staged`).
-- **MCP hygiene (F13):** Strict argument schema validation in JSON-RPC dispatcher returning structured `isError` messages with allowed keys.
+- **Security (F3, R2, G1, G2):** Canonical path resolution (`canonical_path`) normalizing Windows 8.3 short paths, drive casing, and junctions; registered roots model (`roots.toml`, `HIVE_ALLOWED_REPOS`, `PROJECTS`) with `hive roots add <path>`; Python ≥3.9 floor with runtime guard.
+- **Context pack (F1, F15, G7):** Quota-based `pack()` with dynamic surplus redistribution across section shares (35% memory, 15% playbook, 25% task notes, 25% code graph) and `omitted_sections` footer; calibrated token estimator (code 3.4, prose 4.2, 1.08 safety margin) with `tools/calibrate_tokens.py`.
+- **Isolation & Search Scope (F2, G5):** Strict project isolation in `hive_context` (`scope="project"`); `hive_search` defaults to `scope="all"` with deprecation warning when omitted; `hive migrate --search-scope` command.
+- **Code graph (F4, R1):** Directed graph storage (`out_adj`, `in_adj`), edges printed caller -> callee, asymmetric PPR transition weights (`w_fwd=0.7, w_rev=0.3`).
+- **Portability & exact match (F5, F11):** UTF-8 BOM stripping (`utf-8-sig`) across readers and index; exact table cell matching for `active-work.md`.
+- **Provenance & secret gate (F10, F14, G6):** Secret regex enforced as `ERROR` in `lint.py`; `source:` missing on agent notes escalated to `ERROR`; markdown blockquote prefix (`> `) for untrusted data framing; pre-commit hook restricted to staged files.
+- **MCP hygiene & protocol versions (F13, G8, R3):** Minimal stdlib schema validator returning structured error dicts; dual-era protocol negotiation across all supported versions (`2026-07-28` to `2024-11-05`).
+- **ACE hardening (F8, F9, G3, G4):** Decoupled `seen` counter preventing inflation on near-duplicate lessons; automatic v1.0.0 playbook migration; atomic `PlaybookLock` (`{pid}:{hostname}:{iso}:{nonce}`) with 30s stale-steal and dead-process detection preventing lost updates under concurrent writers.
 
 ## 2026-11-23 (later)
 

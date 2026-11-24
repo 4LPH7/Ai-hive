@@ -10,11 +10,14 @@ The live agent is the Generator and Reflector (skill `hive-ace`); this file is t
     python ace.py hook-stop                  Stop hook: ask the agent to reflect after enough work
 scope = "global" or a project slug (folder under D:\\PROJECTS, lowercased, spaces to hyphens).
 """
+import datetime
 import json
 import os
 import re
+import socket
 import sys
 import time
+import uuid
 from pathlib import Path
 
 VAULT = Path(os.environ.get("HIVE_VAULT", r"D:\Valut\OBS"))
@@ -23,7 +26,7 @@ STATE_PATH = Path(os.environ.get("HIVE_ACE_STATE") or Path(
     os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or os.getcwd()) / "hive" / "ace-state.json")
 
 SECTIONS = {"strategies": "str", "pitfalls": "pit", "commands": "cmd", "conventions": "con"}
-LINE_RE = re.compile(r"^- \[([a-z]{3}-\d{5})\] helpful=(\d+) harmful=(\d+) :: (.+)$")
+LINE_RE = re.compile(r"^- \[([a-z]{3}-\d{5})\] (?:seen=(\d+)\s+)?helpful=(\d+)\s+harmful=(\d+)\s+::\s+(.+)$")
 MAX_BULLET_CHARS = 300
 MAX_ADDS_PER_APPLY = 5      # a noisy reflection cannot flood the playbook
 MAX_BULLETS = 80            # grow-and-refine cap per playbook
@@ -35,6 +38,109 @@ EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 SECRET_RE = re.compile(
     r"(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY|(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,})", re.I)
+
+
+def is_pid_alive(pid):
+    """Check if process with PID is alive (Windows & POSIX)."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        SYNCHRONIZE = 0x00100000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+
+
+class PlaybookLock:
+    """Atomic file lock with PID:hostname:timestamp:nonce and 30s stale-steal."""
+
+    def __init__(self, path, timeout=30.0):
+        self.lock_path = Path(path).with_suffix(".lock")
+        self.timeout = timeout
+        self.fd = None
+        self.hostname = socket.gethostname()
+
+    def acquire(self):
+        start = time.time()
+        nonce = uuid.uuid4().hex[:8]
+        payload = f"{os.getpid()}:{self.hostname}:{datetime.datetime.utcnow().isoformat()}:{nonce}\n"
+        while True:
+            try:
+                self.fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                os.write(self.fd, payload.encode("utf-8"))
+                return self
+            except FileExistsError:
+                pass
+            except OSError:
+                time.sleep(0.01)
+                continue
+
+            elapsed = time.time() - start
+            if elapsed > self.timeout:
+                raise TimeoutError(f"could not acquire playbook lock after {self.timeout}s: held by {self.lock_path}")
+
+            # Only inspect lock details after a brief wait
+            if elapsed > 0.5:
+                content = ""
+                try:
+                    content = self.lock_path.read_text(encoding="utf-8").strip()
+                    parts = content.split(":")
+                    lock_pid = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else -1
+                    lock_host = parts[1] if len(parts) > 1 else ""
+                except (OSError, ValueError):
+                    lock_pid, lock_host = -1, ""
+
+                is_stale = False
+                if lock_host == self.hostname and lock_pid > 0 and not is_pid_alive(lock_pid):
+                    is_stale = True
+
+                try:
+                    age = time.time() - self.lock_path.stat().st_mtime
+                except OSError:
+                    age = 0.0
+
+                if is_stale or age > self.timeout:
+                    if lock_host != self.hostname and not is_stale:
+                        raise TimeoutError(f"playbook locked by foreign host {lock_host} (age {age:.1f}s)")
+                    try:
+                        self.lock_path.unlink()
+                    except OSError:
+                        pass
+                    continue
+
+            time.sleep(0.02)
+
+    def release(self):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+        for _ in range(100):
+            try:
+                if not self.lock_path.exists():
+                    break
+                self.lock_path.unlink()
+                break
+            except OSError:
+                time.sleep(0.01)
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
 
 
 def slugify(name):
@@ -60,7 +166,7 @@ def scope_for_cwd(cwd):
 # ---------------------------------------------------------------- playbook file
 
 def parse(text):
-    """-> {section: [bullet]}; bullet = {id, helpful, harmful, content}. Unknown lines are dropped:
+    """-> {section: [bullet]}; bullet = {id, seen, helpful, harmful, content}. Unknown lines are dropped:
     the playbook is machine-managed."""
     sections, current = {name: [] for name in SECTIONS}, None
     for line in text.splitlines():
@@ -70,8 +176,11 @@ def parse(text):
             continue
         m = LINE_RE.match(line.strip())
         if m and current:
-            sections[current].append({"id": m.group(1), "helpful": int(m.group(2)),
-                                      "harmful": int(m.group(3)), "content": m.group(4).strip()})
+            helpful = int(m.group(3))
+            harmful = int(m.group(4))
+            seen = int(m.group(2)) if m.group(2) is not None else (helpful + harmful)
+            sections[current].append({"id": m.group(1), "seen": seen, "helpful": helpful,
+                                      "harmful": harmful, "content": m.group(5).strip()})
     return sections
 
 
@@ -83,7 +192,7 @@ def render(scope, sections, today):
     body = []
     for name in SECTIONS:
         body.append(f"\n## {name}\n")
-        body += [f"- [{b['id']}] helpful={b['helpful']} harmful={b['harmful']} :: {b['content']}"
+        body += [f"- [{b['id']}] seen={b.get('seen', b['helpful'] + b['harmful'])} helpful={b['helpful']} harmful={b['harmful']} :: {b['content']}"
                  for b in sections[name]]
     return head + "\n".join(body) + "\n"
 
@@ -143,10 +252,10 @@ def apply_ops(sections, ops):
             continue
         twin = max(by_id.values(), key=lambda b: jaccard(tokens(b["content"]), tokens(content)), default=None)
         if twin and jaccard(tokens(twin["content"]), tokens(content)) >= DUP_JACCARD:
-            twin["helpful"] += 1  # same lesson again: reinforce instead of duplicating
+            twin["seen"] = twin.get("seen", twin["helpful"] + twin["harmful"]) + 1  # reinforce seen count without inflating helpful
             report["reinforced"].append(twin["id"])
             continue
-        bullet = {"id": f"{SECTIONS[section]}-{next_n:05d}", "helpful": 0, "harmful": 0, "content": content}
+        bullet = {"id": f"{SECTIONS[section]}-{next_n:05d}", "seen": 1, "helpful": 0, "harmful": 0, "content": content}
         next_n += 1
         adds += 1
         new[section].append(bullet)
@@ -163,6 +272,17 @@ def apply_ops(sections, ops):
         report["pruned"] += sorted(ids)
         new = {name: [b for b in bullets if b["id"] not in ids] for name, bullets in new.items()}
     return new, report
+
+
+def apply(scope, ops):
+    """Load, apply ops under atomic lock, save, return report."""
+    path = scope_path(scope)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with PlaybookLock(path):
+        current = load(scope)
+        new_sections, report = apply_ops(current, ops)
+        save(scope, new_sections)
+        return report
 
 
 def select(scopes, task="", limit=INJECT_LIMIT):
@@ -268,8 +388,7 @@ def main(argv):
             return 1
         ops = payload.get("operations", []) + payload.get("bullet_tags", []) if isinstance(payload, dict) else payload
         ops = [dict(o, type=o.get("type", "TAG")) for o in ops if isinstance(o, dict)]
-        sections, report = apply_ops(load(rest[0]), ops)
-        save(rest[0], sections)
+        report = apply(rest[0], ops)
         print(json.dumps(report, indent=1))
         return 0
     if cmd == "show" and rest:

@@ -38,7 +38,8 @@ class CuratorTest(unittest.TestCase):
                                      "content": "graphify indexes the untracked Python runtime folder too"}))
         self.assertEqual(r["added"], [])
         self.assertEqual(r["reinforced"], ["pit-00001"])
-        self.assertEqual(s["pitfalls"][0]["helpful"], 1)
+        self.assertEqual(s["pitfalls"][0]["seen"], 2)
+        self.assertEqual(s["pitfalls"][0]["helpful"], 0)
 
     def test_rejects_secrets_bad_sections_long_and_floods(self):
         _, r = ace.apply_ops(self.empty, ops(
