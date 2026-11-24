@@ -87,7 +87,10 @@ impl PlaybookLock {
                 .open(&lock_path)
             {
                 Ok(mut file) => {
-                    let _ = file.write_all(payload.as_bytes());
+                    if let Err(err) = file.write_all(payload.as_bytes()) {
+                        let _ = fs::remove_file(&lock_path);
+                        return Err(format!("failed to write lock payload: {}", err));
+                    }
                     return Ok(Self {
                         lock_path,
                         acquired: true,

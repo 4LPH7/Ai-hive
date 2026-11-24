@@ -231,9 +231,11 @@ impl Index {
                 Err(_) => continue,
             };
 
-            if let Some((k_mtime, k_size, _)) = known.get(&rel) {
-                if (k_mtime - mtime).abs() < 1e-4 && *k_size == size {
-                    continue;
+            if !force {
+                if let Some((k_mtime, k_size, _)) = known.get(&rel) {
+                    if (k_mtime - mtime).abs() < 1e-4 && *k_size == size {
+                        continue;
+                    }
                 }
             }
 

@@ -131,6 +131,58 @@ class TestCodexReviewFixes(unittest.TestCase):
         self.assertTrue(canary_file.is_file())
         self.assertEqual(canary_file.read_text(encoding="utf-8"), "print('precious local work')")
 
+    def test_force_refresh_bypasses_mtime_cache(self):
+        """Ensure force=True re-hashes notes even when mtime and size are identical."""
+        vault_dir = self.tmp_path / "vault_refresh"
+        vault_dir.mkdir()
+        note = vault_dir / "note.md"
+        note.write_text("---\ntype: note\n---\n# Original\nContent 1\n", encoding="utf-8")
+        st = note.stat()
+
+        db_path = self.tmp_path / "refresh.sqlite"
+        idx = hive.Index(vault_dir, db_path)
+        try:
+            idx.refresh(force=True)
+            row = idx.db.execute("SELECT sha256 FROM notes WHERE path='note.md'").fetchone()
+            orig_hash = row[0]
+
+            # Modify note content but artificially keep mtime and size identical
+            note.write_text("---\ntype: note\n---\n# Modified\nContent 2\n", encoding="utf-8")
+            os.utime(str(note), (st.st_atime, st.st_mtime))
+
+            # Non-forced refresh skips due to (mtime, size) match
+            idx.refresh(force=False)
+            row2 = idx.db.execute("SELECT sha256 FROM notes WHERE path='note.md'").fetchone()
+            self.assertEqual(row2[0], orig_hash)
+
+            # Forced refresh re-hashes and updates DB
+            idx.refresh(force=True)
+            row3 = idx.db.execute("SELECT sha256 FROM notes WHERE path='note.md'").fetchone()
+            self.assertNotEqual(row3[0], orig_hash)
+        finally:
+            idx.db.close()
+
+    def test_curate_payload_malformed_json_types(self):
+        """Ensure curate handles non-dict/non-list payloads without raising unhandled exceptions."""
+        import llm
+
+        old_chat = llm.chat_completion
+        llm.chat_completion = lambda cfg, model, sys_p, usr_p, schema=None: '["unexpected", "list", "instead", "of", "dict"]'
+        try:
+            vault_dir = self.tmp_path / "vault_curate"
+            vault_dir.mkdir()
+            (vault_dir / "inbox").mkdir()
+            res = curate.run_curate(
+                ledger_path=self.tmp_path / "missing.jsonl",
+                vault_path=vault_dir,
+                project="ai-hive",
+                dry_run=True,
+            )
+            self.assertEqual(res["merges_count"], 0)
+            self.assertFalse(res["skipped"])
+        finally:
+            llm.chat_completion = old_chat
+
 
 if __name__ == "__main__":
     unittest.main()

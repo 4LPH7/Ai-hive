@@ -564,3 +564,50 @@ fn test_codex_review_fixes_rust() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_utf8_slicing_and_force_refresh_rust() {
+    // 1. Test packer with multi-byte unicode emojis in tight budget
+    let sec = ai_hive::packer::Section {
+        name: "emoji_test",
+        text: "🦀🔥💡🚀⚡️🎯🛠️📦🤖",
+        weight: 1.0,
+    };
+    // Very tight budget to force character truncation fallback
+    let packed = ai_hive::packer::pack(&[sec], 2);
+    assert!(!packed.is_empty());
+
+    // 2. Test graph fmt_node with multi-byte label > 80 chars
+    let multibyte_label = "🦀".repeat(50); // 50 * 4 = 200 bytes
+    let node = ai_hive::graph::Node {
+        id: "test_node".to_string(),
+        label: Some(multibyte_label),
+        file_type: None,
+        source_file: None,
+        source_location: None,
+        community_name: None,
+    };
+    let formatted = ai_hive::graph::fmt_node(&node, true);
+    assert!(formatted.contains("..."));
+    assert!(formatted.contains("🦀"));
+
+    // 3. Test force refresh reindexes when mtime/size identical
+    let tmp = std::env::temp_dir().join(format!("hive_force_refresh_{}", std::process::id()));
+    let vault = tmp.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    let note = vault.join("note.md");
+    std::fs::write(&note, "---\ntype: note\n---\n# Original\nContent 1\n").unwrap();
+
+    let db_path = tmp.join("test.sqlite");
+    let mut idx = ai_hive::index::Index::new(Some(vault.clone()), Some(db_path)).unwrap();
+    idx.refresh(true).unwrap();
+
+    // Overwrite content
+    std::fs::write(&note, "---\ntype: note\n---\n# Modified\nContent 2\n").unwrap();
+
+    // Forced refresh must detect change
+    let changed = idx.refresh(true).unwrap();
+    assert_eq!(changed, 1);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

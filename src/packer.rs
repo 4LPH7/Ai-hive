@@ -131,7 +131,10 @@ pub fn pack(sections: &[Section], budget: usize) -> String {
                 out.push(truncated);
             } else {
                 let chars = avail_tokens * 3;
-                let safe_chars = chars.min(s.text.len());
+                let mut safe_chars = chars.min(s.text.len());
+                while safe_chars > 0 && !s.text.is_char_boundary(safe_chars) {
+                    safe_chars -= 1;
+                }
                 let truncated = format!("{}{}", &s.text[..safe_chars], suffix);
                 out.push(truncated);
             }

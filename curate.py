@@ -142,32 +142,44 @@ def run_curate(ledger_path=None, vault_path=None, project=None, dry_run=False):
 
     try:
         payload = json.loads(raw_response)
+        if not isinstance(payload, dict):
+            payload = {}
     except json.JSONDecodeError:
         payload = {}
 
     # 2. Deterministic Validation Gate
     validated_merges = []
-    for m in payload.get("paraphrase_merges", []):
-        tid = m.get("target_id")
-        if tid not in known_bullet_ids:
-            continue
-        content = m.get("merged_content", "").strip()
-        if not content or len(content) > ace.MAX_BULLET_CHARS or ace.SECRET_RE.search(content):
-            continue
-        validated_merges.append(m)
-        if len(validated_merges) >= 5:
-            break
+    merges_raw = payload.get("paraphrase_merges")
+    if isinstance(merges_raw, list):
+        for m in merges_raw:
+            if not isinstance(m, dict):
+                continue
+            tid = m.get("target_id")
+            if tid not in known_bullet_ids:
+                continue
+            content = str(m.get("merged_content", "")).strip()
+            if not content or len(content) > ace.MAX_BULLET_CHARS or ace.SECRET_RE.search(content):
+                continue
+            validated_merges.append(m)
+            if len(validated_merges) >= 5:
+                break
 
     validated_contradictions = []
-    for c in payload.get("contradictions", []):
-        ba = c.get("bullet_a")
-        bb = c.get("bullet_b")
-        if ba not in known_bullet_ids or bb not in known_bullet_ids:
-            continue
-        validated_contradictions.append(c)
+    contra_raw = payload.get("contradictions")
+    if isinstance(contra_raw, list):
+        for c in contra_raw:
+            if not isinstance(c, dict):
+                continue
+            ba = c.get("bullet_a")
+            bb = c.get("bullet_b")
+            if ba not in known_bullet_ids or bb not in known_bullet_ids:
+                continue
+            validated_contradictions.append(c)
 
-    validated_drifts = payload.get("adr_drift_warnings", [])
-    validated_aliases = payload.get("query_alias_proposals", [])
+    drifts_raw = payload.get("adr_drift_warnings")
+    validated_drifts = [d for d in drifts_raw if isinstance(d, dict)] if isinstance(drifts_raw, list) else []
+    aliases_raw = payload.get("query_alias_proposals")
+    validated_aliases = [a for a in aliases_raw if isinstance(a, dict)] if isinstance(aliases_raw, list) else []
 
     total_proposals = len(validated_merges) + len(validated_contradictions) + len(validated_drifts) + len(validated_aliases)
     if total_proposals == 0:

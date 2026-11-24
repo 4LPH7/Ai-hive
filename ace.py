@@ -84,7 +84,16 @@ class PlaybookLock:
         while True:
             try:
                 self.fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                os.write(self.fd, payload.encode("utf-8"))
+                try:
+                    os.write(self.fd, payload.encode("utf-8"))
+                except BaseException:
+                    os.close(self.fd)
+                    self.fd = None
+                    try:
+                        self.lock_path.unlink()
+                    except OSError:
+                        pass
+                    raise
                 return self
             except FileExistsError:
                 pass

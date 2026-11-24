@@ -263,7 +263,7 @@ class Index:
                 seen.add(rel)
                 st = entry.stat()
                 mtime, size = st.st_mtime, st.st_size
-                if rel in known and known[rel][0] == mtime and known[rel][1] == size:
+                if not force and rel in known and known[rel][0] == mtime and known[rel][1] == size:
                     continue
                 try:
                     text = Path(entry.path).read_text(encoding="utf-8-sig", errors="replace")
@@ -440,7 +440,8 @@ def repo_dir(repo):
             for d in root.iterdir():
                 if d.is_dir() and slugify(d.name) == want:
                     can = canonical_path(d)
-                    return can
+                    if can != root and can.is_relative_to(root):
+                        return can
         except OSError:
             continue
     return None
@@ -1217,7 +1218,9 @@ def tool_curate(*args):
     return "\n".join(lines)
 
 
-def main(argv):
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
     cmd, *rest = argv or ["serve"]
     if cmd == "serve":
         return serve()
@@ -1264,5 +1267,8 @@ if __name__ == "__main__":
     native = find_native_binary()
     if native:
         import subprocess
-        sys.exit(subprocess.call([native, *sys.argv[1:]]))
+        try:
+            sys.exit(subprocess.call([native, *sys.argv[1:]]))
+        except Exception:
+            pass
     sys.exit(main(sys.argv[1:]))

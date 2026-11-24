@@ -410,7 +410,11 @@ pub fn repo_dir(repo: &str) -> Option<PathBuf> {
                 if entry.path().is_dir() {
                     let name = entry.file_name().to_string_lossy().to_string();
                     if slugify(&name) == want {
-                        return Some(entry.path());
+                        if let Ok(can) = entry.path().canonicalize() {
+                            if &can != root && is_relative_to(&can, root) {
+                                return Some(can);
+                            }
+                        }
                     }
                 }
             }
@@ -436,7 +440,11 @@ pub fn fmt_node(n: &Node, seed: bool) -> String {
     let label = if label_clean.len() <= 80 {
         label_clean
     } else {
-        format!("{}...", &label_clean[..77])
+        let mut end = 77;
+        while !label_clean.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        format!("{}...", &label_clean[..end])
     };
 
     let comm = n.community_name.as_deref().unwrap_or("");

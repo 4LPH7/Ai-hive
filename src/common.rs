@@ -27,10 +27,21 @@ pub fn validate_slug(name: &str) -> Result<String, String> {
 pub fn canonical_path(p: &Path) -> PathBuf {
     match p.canonicalize() {
         Ok(c) => {
-            let s = c.to_string_lossy().to_lowercase();
-            PathBuf::from(s.trim_start_matches(r"\\?\"))
+            let s = c.to_string_lossy();
+            let trimmed = s.trim_start_matches(r"\\?\");
+            if cfg!(windows) {
+                PathBuf::from(trimmed.to_lowercase())
+            } else {
+                PathBuf::from(trimmed)
+            }
         }
-        Err(_) => PathBuf::from(p.to_string_lossy().to_lowercase()),
+        Err(_) => {
+            if cfg!(windows) {
+                PathBuf::from(p.to_string_lossy().to_lowercase())
+            } else {
+                p.to_path_buf()
+            }
+        }
     }
 }
 
@@ -181,11 +192,15 @@ pub fn load_config(
     cli_db: Option<PathBuf>,
     cli_config: Option<&Path>,
 ) -> HiveConfig {
-    let config_path = cli_config
-        .map(PathBuf::from)
-        .or_else(find_default_config_path);
-
-    let toml_data = if let Some(cp) = config_path {
+    let toml_data = if let Some(explicit) = cli_config {
+        match fs::read_to_string(explicit) {
+            Ok(c) => parse_toml_config(&c),
+            Err(e) => {
+                eprintln!("hive: error reading specified config {}: {}", explicit.display(), e);
+                HashMap::new()
+            }
+        }
+    } else if let Some(cp) = find_default_config_path() {
         fs::read_to_string(cp)
             .map(|c| parse_toml_config(&c))
             .unwrap_or_default()
