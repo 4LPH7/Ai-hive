@@ -22,7 +22,7 @@ jobs:
         run: python -W error::SyntaxWarning -m unittest -v
       - name: Packaging smoke test
         run: |
-          pip install --no-deps --break-system-packages .
+          pip install --no-build-isolation --no-deps --break-system-packages .
           python -m hive --version
 
   unittest-windows:
@@ -41,7 +41,7 @@ jobs:
         run: python -W error::SyntaxWarning -m unittest -v
       - name: Packaging smoke test
         run: |
-          pip install --no-deps .
+          pip install --no-build-isolation --no-deps .
           python -m hive --version
 
   rust-arch:

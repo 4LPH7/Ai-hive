@@ -1265,7 +1265,7 @@ def tool_curate(*args):
 
 def find_native_binary():
     """Find native compiled hive binary if available."""
-    if os.environ.get("HIVE_FORCE_PYTHON") == "1":
+    if os.environ.get("HIVE_FORCE_PYTHON") == "1" or os.environ.get("_HIVE_RECURSION_GUARD") == "1":
         return None
     env_bin = os.environ.get("HIVE_BIN")
     if env_bin and os.path.isfile(env_bin):
@@ -1283,7 +1283,15 @@ def find_native_binary():
     import shutil
     on_path = shutil.which("hive")
     if on_path and os.path.isfile(on_path):
-        return on_path
+        resolved = Path(on_path).resolve()
+        scripts_dir = Path(sys.prefix) / ("Scripts" if sys.platform == "win32" else "bin")
+        try:
+            if resolved == Path(__file__).resolve() or resolved.is_relative_to(scripts_dir.resolve()):
+                return None
+        except (ValueError, AttributeError):
+            if str(scripts_dir.resolve()).lower() in str(resolved).lower():
+                return None
+        return str(resolved)
 
     return None
 
@@ -1292,10 +1300,11 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     native = find_native_binary()
-    if native:
+    if native and os.environ.get("_HIVE_RECURSION_GUARD") != "1":
         import subprocess
         try:
-            return subprocess.call([native, *argv])
+            env = dict(os.environ, _HIVE_RECURSION_GUARD="1")
+            return subprocess.call([native, *argv], env=env)
         except Exception:
             pass
     cmd, *rest = argv or ["serve"]
