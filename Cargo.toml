@@ -1,6 +1,6 @@
 [package]
 name = "ai-hive"
-version = "1.2.0"
+version = "2.5.0"
 edition = "2021"
 authors = ["DeepMind Team"]
 description = "High-performance shared memory MCP server for AI coding agents"
