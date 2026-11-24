@@ -1156,6 +1156,13 @@ def tool_ledger(*args, tail=None, project=None):
 
 
 def cmd_pre_commit(*args):
+    native = find_native_binary()
+    if native:
+        import subprocess
+        res = subprocess.call([native, "pre-commit", *args])
+        if res != 0:
+            sys.exit(res)
+        return "All pre-commit checks passed cleanly."
     print("=== [1/2] Running hive lint ===")
     rep = tool_lint()
     print(rep)
