@@ -266,6 +266,19 @@ pub fn scan_skills(roots: Option<&[(PathBuf, String)]>) -> Vec<SkillMeta> {
     skills
 }
 
+pub fn match_token(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    if a.len() >= 4 && b.len() >= 4 {
+        let prefix_len = a.chars().zip(b.chars()).take_while(|(ca, cb)| ca == cb).count();
+        if prefix_len >= 4 {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn score_skill(task: &str, skill: &SkillMeta) -> f64 {
     let task_lower = task.to_lowercase();
     let task_toks = tokenize(&task_lower);
@@ -274,18 +287,20 @@ pub fn score_skill(task: &str, skill: &SkillMeta) -> f64 {
     }
 
     let mut trigger_hit = false;
+    let mut trigger_exact = false;
     for trig in &skill.triggers {
         let t_low = trig.to_lowercase();
         if !t_low.is_empty() && task_lower.contains(&t_low) {
             trigger_hit = true;
+            trigger_exact = true;
             break;
         }
         let trig_toks = tokenize(&t_low);
         if !trig_toks.is_empty() {
             let overlap = trig_toks.iter().filter(|tt| {
-                task_toks.iter().any(|t| t == *tt || (t.len() >= 4 && tt.len() >= 4 && (t.starts_with(*tt) || tt.starts_with(t))))
+                task_toks.iter().any(|t| match_token(tt, t))
             }).count();
-            if trig_toks.is_subset(&task_toks) || (trig_toks.len() >= 2 && overlap >= 2) || (trig_toks.len() == 1 && overlap == 1) {
+            if trig_toks.is_subset(&task_toks) || overlap == trig_toks.len() || (trig_toks.len() >= 4 && overlap >= trig_toks.len() - 1) {
                 trigger_hit = true;
                 break;
             }
@@ -295,7 +310,7 @@ pub fn score_skill(task: &str, skill: &SkillMeta) -> f64 {
     let name_toks = tokenize(&skill.name);
     let name_overlap = if !name_toks.is_empty() {
         let hits = name_toks.iter().filter(|n| {
-            task_toks.iter().any(|t| t == *n || (t.len() >= 4 && n.len() >= 4 && (t.starts_with(*n) || n.starts_with(t))))
+            task_toks.iter().any(|t| match_token(n, t))
         }).count();
         hits as f64 / name_toks.len() as f64
     } else {
@@ -305,7 +320,7 @@ pub fn score_skill(task: &str, skill: &SkillMeta) -> f64 {
     let desc_toks = tokenize(&skill.description);
     let desc_overlap = if !desc_toks.is_empty() {
         let hits = desc_toks.iter().filter(|d| {
-            task_toks.iter().any(|t| t == *d || (t.len() >= 4 && d.len() >= 4 && (t.starts_with(*d) || d.starts_with(t))))
+            task_toks.iter().any(|t| match_token(d, t))
         }).count();
         hits as f64 / desc_toks.len() as f64
     } else {
@@ -315,6 +330,9 @@ pub fn score_skill(task: &str, skill: &SkillMeta) -> f64 {
     let mut score = 0.0;
     if trigger_hit {
         score += 0.65;
+        if trigger_exact {
+            score += 0.10;
+        }
     }
     score += name_overlap * 0.45;
     score += desc_overlap * 0.25;
@@ -535,13 +553,55 @@ pub fn install_skill(
         return Err(format!("Security audit failed: {}", reason.unwrap_or_default()));
     }
 
+    // Pin package with SHA-256 tree hash in .skill-lock.json
+    use sha2::{Digest, Sha256};
+    let mut file_entries = Vec::new();
+    for entry in walkdir::WalkDir::new(&dest_dir).into_iter().flatten() {
+        if entry.file_type().is_file() {
+            let p = entry.path();
+            if p.file_name().and_then(|n| n.to_str()) == Some(".skill-lock.json") {
+                continue;
+            }
+            if let Ok(bytes) = fs::read(p) {
+                let mut hasher = Sha256::new();
+                hasher.update(&bytes);
+                let hash_hex = format!("{:x}", hasher.finalize());
+                let rel = p.strip_prefix(&dest_dir).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                file_entries.push(serde_json::json!({
+                    "path": rel,
+                    "sha256": hash_hex
+                }));
+            }
+        }
+    }
+    let lock_data = serde_json::json!({
+        "package": package_name,
+        "installed_path": dest_dir.display().to_string(),
+        "installed_at": chrono::Utc::now().to_rfc3339(),
+        "files": file_entries
+    });
+    let _ = fs::write(dest_dir.join(".skill-lock.json"), serde_json::to_string_pretty(&lock_data).unwrap_or_default());
+
     Ok(dest_dir)
 }
 
 pub fn audit_skill_safety(dir_or_file: &Path) -> (bool, Option<String>) {
     let re_eval = Regex::new(r"(?i)eval\s*\(").unwrap();
     let re_curl = Regex::new(r"(?i)curl\s+-[A-Za-z]*d\s+.*https?://").unwrap();
-    let re_ps = Regex::new(r"(?i)powershell\s+-enc\b|Invoke-Expression\b").unwrap();
+    let re_curl_sh = Regex::new(r"(?i)(?:curl|wget)\s+.*\|\s*(?:ba)?sh\b").unwrap();
+    let re_ps = Regex::new(r"(?i)powershell(?:\.exe)?\s+.*(?:-enc|-encodedcommand|invoke-expression|iex)\b|Invoke-Expression\b").unwrap();
+    let re_env = Regex::new(r"(?i)\b(?:printenv|Get-ChildItem\s+env:)\b").unwrap();
+    let re_rev_shell = Regex::new(r"(?i)/dev/tcp/\d+\.\d+\.\d+\.\d+|\b(?:nc|ncat|netcat)\s+-[e|c]\b").unwrap();
+    let re_injection = Regex::new(r"(?i)\b(?:ignore|disregard|override)\s+(?:all\s+)?(?:previous|prior)\s+(?:instructions|prompts|rules)\b|\b(?:system\s+prompt\s*:|jailbreak|you\s+are\s+now\s+in\s+developer\s+mode)\b").unwrap();
+
+    let is_trojan_char = |c: char| -> bool {
+        matches!(c,
+            '\u{202A}'..='\u{202E}' |
+            '\u{2066}'..='\u{2069}' |
+            '\u{061C}' | '\u{200E}' | '\u{200F}' |
+            '\u{200B}'..='\u{200D}'
+        )
+    };
 
     let mut paths = Vec::new();
     if dir_or_file.is_file() {
@@ -559,7 +619,23 @@ pub fn audit_skill_safety(dir_or_file: &Path) -> (bool, Option<String>) {
 
     for p in paths {
         if let Ok(content) = fs::read_to_string(&p) {
-            if re_eval.is_match(&content) || re_curl.is_match(&content) || re_ps.is_match(&content) {
+            for (i, c) in content.char_indices() {
+                if is_trojan_char(c) {
+                    return (false, Some(format!("Invisible/Trojan Source character U+{:04X} detected in {}", c as u32, p.display())));
+                }
+                if c == '\u{feff}' && i > 0 {
+                    return (false, Some(format!("Hidden zero-width BOM character detected inside text in {}", p.display())));
+                }
+            }
+
+            if re_eval.is_match(&content)
+                || re_curl.is_match(&content)
+                || re_curl_sh.is_match(&content)
+                || re_ps.is_match(&content)
+                || re_env.is_match(&content)
+                || re_rev_shell.is_match(&content)
+                || re_injection.is_match(&content)
+            {
                 return (false, Some(format!("Dangerous pattern matched in {}", p.display())));
             }
         }

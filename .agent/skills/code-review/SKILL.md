@@ -6,9 +6,11 @@ triggers:
   - review code
   - review pr
   - review diff
+  - audit diff
   - audit changes
   - pre-commit review
   - check bugs
+  - security audit
 ---
 
 # Code Review Protocol

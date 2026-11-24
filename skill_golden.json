@@ -1,0 +1,102 @@
+[
+  {
+    "query": "we have a failing unit test in postgres database",
+    "expected_skill": "systematic-debugging",
+    "should_match": true
+  },
+  {
+    "query": "investigate unexpected crash in auth service",
+    "expected_skill": "systematic-debugging",
+    "should_match": true
+  },
+  {
+    "query": "reproduce and debug error trace in worker thread",
+    "expected_skill": "systematic-debugging",
+    "should_match": true
+  },
+  {
+    "query": "review code changes before merging pr to main",
+    "expected_skill": "code-review",
+    "should_match": true
+  },
+  {
+    "query": "audit diff for security vulnerabilities and injection flaws",
+    "expected_skill": "code-review",
+    "should_match": true
+  },
+  {
+    "query": "check changes against code review guidelines",
+    "expected_skill": "code-review",
+    "should_match": true
+  },
+  {
+    "query": "tdd write tests first for new payment endpoint",
+    "expected_skill": "test-driven-development",
+    "should_match": true
+  },
+  {
+    "query": "add unit test suite for ledger module",
+    "expected_skill": "test-driven-development",
+    "should_match": true
+  },
+  {
+    "query": "improve integration test coverage for lockfile",
+    "expected_skill": "test-driven-development",
+    "should_match": true
+  },
+  {
+    "query": "clean comments and remove obvious ai narration",
+    "expected_skill": "antislop-code",
+    "should_match": true
+  },
+  {
+    "query": "enforce anti-slop comment hygiene across repository",
+    "expected_skill": "antislop-code",
+    "should_match": true
+  },
+  {
+    "query": "strip comments that explain standard syntax",
+    "expected_skill": "antislop-code",
+    "should_match": true
+  },
+  {
+    "query": "inspect architecture and call graph for god nodes",
+    "expected_skill": "architecture-graph",
+    "should_match": true
+  },
+  {
+    "query": "who calls this symbol and what are its callees",
+    "expected_skill": "architecture-graph",
+    "should_match": true
+  },
+  {
+    "query": "check repo structure and module dependencies before refactor",
+    "expected_skill": "architecture-graph",
+    "should_match": true
+  },
+  {
+    "query": "what is the weather today in san francisco",
+    "expected_skill": null,
+    "should_match": false
+  },
+  {
+    "query": "tell me a funny programming joke",
+    "expected_skill": null,
+    "should_match": false
+  },
+  {
+    "query": "calculate the square root of 144",
+    "expected_skill": null,
+    "should_match": false
+  },
+  {
+    "query": "write a short poem about autumn leaves",
+    "expected_skill": null,
+    "should_match": false
+  },
+  {
+    "query": "how do I make a chocolate cake from scratch",
+    "expected_skill": null,
+    "should_match": false
+  }
+]

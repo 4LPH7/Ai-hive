@@ -90,6 +90,8 @@ enum Commands {
         #[arg(long, default_value = "all")]
         scope: String,
     },
+    /// Run cross-platform pre-commit quality gate (lint + tests)
+    PreCommit,
     /// ACE playbook curator operations
     Ace {
         #[command(subcommand)]
@@ -209,6 +211,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Commands::Skill { task, auto_install, scope } => {
                 let res = ai_hive::mcp::tool_skill(&task, auto_install, &scope)?;
                 println!("{}", res);
+            }
+            Commands::PreCommit => {
+                println!("=== [1/2] Running hive lint ===");
+                let findings = lint(&cfg.vault, None);
+                println!("{}", format_report(&findings));
+                if findings.iter().any(|f| f.severity == "ERROR") {
+                    eprintln!("pre-commit: lint failed with errors");
+                    std::process::exit(1);
+                }
+
+                println!("=== [2/2] Running Rust test suite ===");
+                let status = std::process::Command::new("cargo")
+                    .args(&["test", "--quiet"])
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {
+                        println!("All pre-commit checks passed cleanly.");
+                    }
+                    _ => {
+                        eprintln!("pre-commit: cargo test failed");
+                        std::process::exit(1);
+                    }
+                }
             }
             Commands::Ace { cmd } => {
                 let vault = cfg.vault;

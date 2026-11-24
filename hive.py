@@ -1101,11 +1101,29 @@ def tool_ledger(tail=None, project=None):
     return "\n".join(lines)
 
 
+def cmd_pre_commit(*args):
+    print("=== [1/2] Running hive lint ===")
+    rep = tool_lint()
+    print(rep)
+    if "ERROR" in rep:
+        sys.exit(1)
+    print("=== [2/2] Running Python tests ===")
+    import subprocess
+    res = subprocess.call([sys.executable, "-m", "unittest", "discover"])
+    if res != 0:
+        sys.exit(res)
+    return "All pre-commit checks passed cleanly."
+
+
 def main(argv):
     cmd, *rest = argv or ["serve"]
     if cmd == "serve":
         return serve()
-    commands = {"search": tool_search, "graph": tool_graph, "context": tool_context, "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval, "ledger": tool_ledger, "skill": tool_skill}
+    commands = {
+        "search": tool_search, "graph": tool_graph, "context": tool_context,
+        "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
+        "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
+    }
     if cmd not in commands:
         print(__doc__)
         return 2

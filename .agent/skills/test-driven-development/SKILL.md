@@ -5,8 +5,8 @@ triggers:
   - tdd
   - write tests
   - add tests
-  - unit test
-  - integration test
+  - write unit test
+  - add unit test
   - test first
   - test coverage
 ---

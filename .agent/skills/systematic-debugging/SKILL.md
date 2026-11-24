@@ -7,6 +7,8 @@ triggers:
   - fix bug
   - investigate crash
   - test failure
+  - failing test
+  - failing unit test
   - broken
   - error trace
   - reproduce issue

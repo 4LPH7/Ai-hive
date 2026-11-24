@@ -247,18 +247,31 @@ def score_skill(task, skill):
         return 0.0
 
     def match_token(a, b):
-        return a == b or (len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a)))
+        if a == b:
+            return True
+        if len(a) >= 4 and len(b) >= 4:
+            prefix_len = 0
+            for ca, cb in zip(a, b):
+                if ca == cb:
+                    prefix_len += 1
+                else:
+                    break
+            if prefix_len >= 4:
+                return True
+        return False
 
     # 1. Exact or high-overlap trigger match (high weight multiplier)
     trigger_hit = False
+    trigger_exact = False
     for trig in skill.triggers:
         if trig and trig.lower() in task_lower:
             trigger_hit = True
+            trigger_exact = True
             break
         trig_toks = tokenize(trig)
         if trig_toks:
             overlap = sum(1 for tt in trig_toks if any(match_token(tt, t) for t in task_toks))
-            if trig_toks.issubset(task_toks) or (len(trig_toks) >= 2 and overlap >= 2) or (len(trig_toks) == 1 and overlap == 1):
+            if trig_toks.issubset(task_toks) or overlap == len(trig_toks) or (len(trig_toks) >= 4 and overlap >= len(trig_toks) - 1):
                 trigger_hit = True
                 break
 
@@ -273,7 +286,9 @@ def score_skill(task, skill):
     # Weighted combination
     score = 0.0
     if trigger_hit:
-        score += 0.65  # Explicit trigger activation guarantees meeting 0.65 threshold
+        score += 0.65
+        if trigger_exact:
+            score += 0.10  # Exact substring trigger takes precedence over token overlap
     score += name_overlap * 0.45
     score += desc_overlap * 0.25
 
@@ -300,12 +315,24 @@ def match_skill(task, skills=None, threshold=0.65, custom_roots=None):
 
 # ---------------------------------------------------------------- remote & install
 
+# CVE-2021-42574 Trojan Source BiDi control characters & Zero-Width Obfuscation
+# U+202A..U+202E (LRE, RLE, PDF, LRO, RLO), U+2066..U+2069 (LRI, RLI, FSI, PDI)
+# U+061C (ALM), U+200E (LRM), U+200F (RLM), U+200B..U+200D (ZWSP, ZWNJ, ZWJ)
+BIDI_TROJAN_SOURCE_RE = re.compile(r"[\u202A-\u202E\u2066-\u2069\u061C\u200E\u200F\u200B-\u200D]")
+
 DANGEROUS_PATTERNS = [
     re.compile(r"eval\s*\(", re.I),
     re.compile(r"curl\s+-[A-Za-z]*d\s+.*https?://", re.I),
+    re.compile(r"(?:curl|wget)\s+.*\|\s*(?:ba)?sh\b", re.I),
     re.compile(r"bash\s+-c\s+.*(?:curl|wget)\b", re.I),
-    re.compile(r"powershell\s+-enc\b", re.I),
+    re.compile(r"powershell(?:\.exe)?\s+.*(?:-enc|-encodedcommand|invoke-expression|iex)\b", re.I),
     re.compile(r"Invoke-Expression\b", re.I),
+    re.compile(r"\b(?:printenv|Get-ChildItem\s+env:)\b", re.I),
+    re.compile(r"/dev/tcp/\d+\.\d+\.\d+\.\d+", re.I),
+    re.compile(r"\b(?:nc|ncat|netcat)\s+-[e|c]\b", re.I),
+    # Prompt injection / override directives
+    re.compile(r"\b(?:ignore|disregard|override)\s+(?:all\s+)?(?:previous|prior)\s+(?:instructions|prompts|rules)\b", re.I),
+    re.compile(r"\b(?:system\s+prompt\s*:|jailbreak|you\s+are\s+now\s+in\s+developer\s+mode)\b", re.I),
 ]
 
 
@@ -372,7 +399,7 @@ def find_remote_skills(query):
 
 
 def audit_skill_safety(dir_or_file_path):
-    """Audit skill files for dangerous eval/exfil patterns. Returns (is_safe, error_reason)."""
+    """Audit skill files for dangerous patterns & Trojan Source unicode. Returns (is_safe, error_reason)."""
     p = Path(dir_or_file_path)
     files_to_check = []
     if p.is_file():
@@ -387,6 +414,18 @@ def audit_skill_safety(dir_or_file_path):
     for fp in files_to_check:
         try:
             text = fp.read_text(encoding="utf-8", errors="replace")
+
+            # 1. Trojan Source & Invisible Unicode Check (CVE-2021-42574)
+            bidi_m = BIDI_TROJAN_SOURCE_RE.search(text)
+            if bidi_m:
+                cp = ord(bidi_m.group(0))
+                return False, f"Invisible/Trojan Source character U+{cp:04X} detected in {fp.name}"
+
+            # 2. Hidden zero-width BOM inside text
+            if "\ufeff" in text[1:]:
+                return False, f"Hidden zero-width BOM character detected inside text in {fp.name}"
+
+            # 3. Dangerous patterns
             for pattern in DANGEROUS_PATTERNS:
                 m = pattern.search(text)
                 if m:
@@ -436,6 +475,29 @@ def install_skill(package_name, target_dir=None, dry_run=False):
             # Atomic rollback on security failure
             shutil.rmtree(target_dir, ignore_errors=True)
             return {"status": "error", "error": f"Security audit failed: {reason}"}
+
+        # Pin package with SHA-256 tree hash in .skill-lock.json
+        import hashlib, datetime
+        file_hashes = []
+        for root, _, fnames in os.walk(target_dir):
+            for fn in sorted(fnames):
+                fpath = Path(root) / fn
+                if fn == ".skill-lock.json":
+                    continue
+                try:
+                    h = hashlib.sha256(fpath.read_bytes()).hexdigest()
+                    rel = str(fpath.relative_to(target_dir)).replace("\\", "/")
+                    file_hashes.append({"path": rel, "sha256": h})
+                except OSError:
+                    pass
+        lockfile = target_dir / ".skill-lock.json"
+        lock_data = {
+            "package": package_name,
+            "installed_path": str(target_dir),
+            "installed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "files": file_hashes,
+        }
+        lockfile.write_text(json.dumps(lock_data, indent=2), encoding="utf-8")
 
         return {
             "status": "installed",
