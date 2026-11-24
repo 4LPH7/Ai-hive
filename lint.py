@@ -104,8 +104,16 @@ def check_frontmatter(rel, meta, has_frontmatter):
     if (meta.get("type") in ("adr", "note") and meta.get("agent") != "user" and rel.startswith(SOURCED_PREFIXES)
             and Path(rel).stem not in CONVENTIONAL_NAMES  # playbooks are machine-merged by ace.py
             and updated >= SOURCE_RULE_FROM and not meta.get("source")):
-        out.append(Finding("WARN", "source-missing", rel, "agent-written note needs `source:` (commit, session, URL or file)"))
+        out.append(Finding("ERROR", "source-missing", rel, "agent-written note needs `source:` (commit, session, URL or file)"))
     return out
+
+
+def check_secrets(rel, text):
+    ace = hive.ace()
+    m = ace.SECRET_RE.search(text)
+    if m:
+        return [Finding("ERROR", "secret-detected", rel, f"note appears to contain a secret: {m.group(0)[:20]}...")]
+    return []
 
 
 def check_journal(rel, body):
@@ -132,31 +140,57 @@ def check_size_and_age(rel, meta, text, today):
     return out
 
 
-def lint(vault=hive.VAULT, today=None):
+def git_staged_files(vault):
+    """Return list of staged .md files in the vault git repo."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+            cwd=str(vault), capture_output=True, text=True, check=True
+        )
+        return [line.strip().replace("\\", "/") for line in proc.stdout.splitlines() if line.strip().endswith(".md")]
+    except Exception as exc:
+        print(f"lint: warning: failed to get staged files: {exc}", file=sys.stderr)
+        return None
+
+
+def lint(vault=hive.VAULT, today=None, files=None):
     vault = Path(vault)
     today = today or date.today().isoformat()
-    files = list(walk(vault))
-    notes = [f for f in files if f.endswith(".md") and not f.startswith("_attachments/")]
-    resolver = Resolver(files)
+    all_files = list(walk(vault))
+    resolver = Resolver(all_files)
+    if files is not None:
+        notes = [f.replace("\\", "/") for f in files if f.endswith(".md") and not f.startswith("_attachments/")]
+    else:
+        notes = [f for f in all_files if f.endswith(".md") and not f.startswith("_attachments/")]
     findings, inbound, outbound = [], defaultdict(set), {}
     for rel in notes:
-        text = (vault / rel).read_text(encoding="utf-8", errors="replace")
+        file_path = vault / rel if not Path(rel).is_absolute() else Path(rel)
+        try:
+            rel_posix = file_path.resolve().relative_to(vault.resolve()).as_posix()
+        except (ValueError, OSError):
+            rel_posix = rel.replace("\\", "/")
+        if not file_path.is_file():
+            continue
+        text = file_path.read_text(encoding="utf-8-sig", errors="replace")
         meta, _, body = hive.parse_note(text)
-        findings += check_frontmatter(rel, meta, text.startswith("---"))
-        findings += check_size_and_age(rel, meta, text, today)
-        findings += check_journal(rel, body)
-        outbound[rel] = set()
+        findings += check_frontmatter(rel_posix, meta, text.startswith("---"))
+        findings += check_secrets(rel_posix, text)
+        findings += check_size_and_age(rel_posix, meta, text, today)
+        findings += check_journal(rel_posix, body)
+        outbound[rel_posix] = set()
         for target in links_in(body):
             hits = resolver.resolve(target)
             if not hits:
-                findings.append(Finding("WARN", "broken-link", rel, f"[[{target}]] resolves to no note or file"))
+                findings.append(Finding("WARN", "broken-link", rel_posix, f"[[{target}]] resolves to no note or file"))
             for hit in hits:
-                inbound[hit].add(rel)
-                outbound[rel].add(hit)
-        if meta.get("type") == "adr" and meta.get("status") == "superseded" and not (outbound[rel] - {rel}):
-            findings.append(Finding("ERROR", "superseded-unlinked", rel, "superseded ADR must link its successor"))
+                inbound[hit].add(rel_posix)
+                outbound[rel_posix].add(hit)
+        if meta.get("type") == "adr" and meta.get("status") == "superseded" and not (outbound[rel_posix] - {rel_posix}):
+            findings.append(Finding("ERROR", "superseded-unlinked", rel_posix, "superseded ADR must link its successor"))
     findings += check_names(notes)
-    findings += check_orphans(notes, inbound)
+    if files is None:
+        findings += check_orphans(notes, inbound)
     return findings
 
 
@@ -184,7 +218,18 @@ def format_report(findings):
 
 
 def main(argv):
-    findings = lint(Path(argv[0]) if argv else hive.VAULT)
+    staged_mode = "--staged" in argv
+    rest = [a for a in argv if a != "--staged"]
+    vault = Path(rest[0]) if rest else hive.VAULT
+    if staged_mode:
+        staged = git_staged_files(vault)
+        if staged is not None and not staged:
+            sys.stdout.reconfigure(encoding="utf-8")
+            print("lint: 0 error, 0 warn, 0 info (0 staged files)")
+            return 0
+        findings = lint(vault, files=staged)
+    else:
+        findings = lint(vault)
     sys.stdout.reconfigure(encoding="utf-8")
     print(format_report(findings))
     return 1 if any(f.severity == "ERROR" for f in findings) else 0

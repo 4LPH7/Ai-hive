@@ -98,7 +98,31 @@ class LintTest(unittest.TestCase):
             FM.format(type="note", status="active", updated="2026-11-23").replace("---\n", "---\nsource: commit abc\n", 1),
             encoding="utf-8")
         note(self.root, "projects/demo/playbook.md", updated="2026-11-23")  # written by ace.py, not a claim
-        self.assertEqual([f.path for f in self.run_lint() if f.code == "source-missing"], ["inbox/new.md"])
+        findings = [f for f in self.run_lint() if f.code == "source-missing"]
+        self.assertEqual([f.path for f in findings], ["inbox/new.md"])
+        self.assertEqual(findings[0].severity, "ERROR")
+
+    def test_secret_detected_flags_error(self):
+        note(self.root, "inbox/secret.md", body="# Secret\nsk-ant-api03-123456789012345678901234567890\n")
+        findings = [f for f in self.run_lint() if f.code == "secret-detected"]
+        self.assertEqual([f.path for f in findings], ["inbox/secret.md"])
+        self.assertEqual(findings[0].severity, "ERROR")
+
+    def test_windows_bom_does_not_break_frontmatter(self):
+        p = self.root / "inbox/bom.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes("\ufeff---\ntype: note\nproject: demo\nagent: user\nstatus: active\nupdated: 2026-11-23\n---\n# BOM\n".encode("utf-8"))
+        findings = [f for f in self.run_lint() if f.path == "inbox/bom.md"]
+        self.assertEqual([f.code for f in findings], [])
+
+    def test_staged_lint_filters_to_staged_files(self):
+        note(self.root, "a.md")  # valid
+        note(self.root, "bad.md", fm=False)  # invalid
+        # Full lint sees error on bad.md
+        self.assertIn("frontmatter-missing", [f.code for f in self.run_lint()])
+        # Staged lint targeting only a.md ignores unstaged bad.md
+        staged_findings = lint.lint(self.root, today="2026-11-23", files=["a.md"])
+        self.assertEqual(staged_findings, [])
 
     def test_project_memory_must_say_what_the_project_is(self):
         # 2026-11-23: a _memory.md without this section scored 0 for "personal website" and lost search

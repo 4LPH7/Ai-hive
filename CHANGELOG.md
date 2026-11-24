@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.1.0 (2026-11-24)
+
+- **Security (F3):** Close path traversal in `tool_context` slug validation, `Index.note` canonical vault check (`is_relative_to(VAULT)`), and `repo_dir` root validation against `PROJECTS`.
+- **Context pack (F1, F15):** Quota-based `pack()` with dynamic redistribution across section shares (35% memory, 15% playbook, 25% task notes, 25% code graph) and `omitted_sections` footer; content-aware token estimator (code vs prose + 10% safety margin) preventing large memory notes from starving task notes or graphs.
+- **Isolation (F2):** Strict project isolation in `hive_context` and `hive_search` (default `scope="project"` filters to target project + global; explicit `scope="all"` for cross-project search).
+- **Code graph (F4):** True directed graph storage (`out_adj`, `in_adj`), edges printed in caller -> callee direction, separate forward/reverse transition weights in PPR.
+- **Portability & exact match (F5, F11):** Strip UTF-8 BOM (`utf-8-sig`) in `parse_note` and index reads; exact table cell matching for `active-work.md` preventing substring match collisions.
+- **Provenance & secret gate (F10, F14):** Secret regex enforced as `ERROR` in `lint.py`; `source:` missing on agent notes escalated to `ERROR`; untrusted-data framing (`<untrusted_vault_note>`) with `(agent, source, age)`; pre-commit hook restricted to staged files (`--staged`).
+- **MCP hygiene (F13):** Strict argument schema validation in JSON-RPC dispatcher returning structured `isError` messages with allowed keys.
+
 ## 2026-11-23 (later)
 
 - **Fix:** `hive_lint` failed in every agent with `No module named 'lint'`: agents launch `python -I`, which
