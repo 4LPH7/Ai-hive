@@ -87,7 +87,7 @@ def run_curate(ledger_path=None, vault_path=None, project=None, dry_run=False):
 
     cfg = hive.load_config()
     ledger_p = Path(ledger_path or cfg.get("ledger", Path(os.environ.get("HIVE_LEDGER", "ledger.jsonl"))))
-    vault_p = Path(vault_path or cfg.get("vault", Path(os.environ.get("HIVE_VAULT", r"D:\Valut\OBS"))))
+    vault_p = Path(vault_path or cfg.get("vault", Path(os.environ.get("HIVE_VAULT", Path.home() / "vault"))))
 
     scope = project or "global"
     model = llm.resolve_combo(llm_cfg, "deep", scope)

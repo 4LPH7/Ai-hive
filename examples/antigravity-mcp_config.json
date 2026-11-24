@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "hive": {
-      "command": "C:\\Python315\\python.exe",
-      "args": ["-I", "D:\\PROJECTS\\ai-hive\\hive.py", "serve"]
+      "command": "hive",
+      "args": ["serve"]
     }
   }
 }

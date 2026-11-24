@@ -8,7 +8,7 @@ The live agent is the Generator and Reflector (skill `hive-ace`); this file is t
     python ace.py show <scope> ["task"]      bullets hive_context would inject
     python ace.py hook-start                 SessionStart hook: inject top bullets (stdin = hook JSON)
     python ace.py hook-stop                  Stop hook: ask the agent to reflect after enough work
-scope = "global" or a project slug (folder under D:\\PROJECTS, lowercased, spaces to hyphens).
+scope = "global" or a project slug (folder under projects root, lowercased, spaces to hyphens).
 """
 import datetime
 import json
@@ -211,7 +211,7 @@ def parse(text):
 def render(scope, sections, today):
     head = (f"---\ntype: note\nproject: {'all' if scope == 'global' else scope}\nagent: claude\n"
             f"status: active\nupdated: {today}\n---\n# Playbook: {scope}\n\n"
-            "> ACE playbook. Changed only by `python D:\\PROJECTS\\ai-hive\\ace.py apply` (skill `hive-ace`).\n"
+            "> ACE playbook. Changed only by `hive ace apply` (skill `hive-ace`).\n"
             "> Do not hand-edit: delta merges keep counters and prevent context collapse.\n")
     body = []
     for name in SECTIONS:

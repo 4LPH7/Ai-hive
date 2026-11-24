@@ -928,7 +928,7 @@ TOOLS = {
     "hive_context": (tool_context,
                      "Call first on any task. Token-budgeted memory pack for a project: its active-work row, "
                      "_memory.md, ADR list and, if a task is given, matching vault notes and ranked code-graph symbols.",
-                     {"project": ("string", "Project slug: folder name under D:\\PROJECTS, lowercased, spaces to hyphens"),
+                     {"project": ("string", "Project slug: folder name under projects root, lowercased, spaces to hyphens"),
                       "task": ("string", "What you are about to do (optional, improves ranking)"),
                       "budget": ("integer", "Max tokens to return (default 1500)")}, ["project"]),
     "hive_search": (tool_search,
@@ -940,7 +940,7 @@ TOOLS = {
     "hive_graph": (tool_graph,
                    "Ranked code-graph neighbourhood from graphify (Personalized PageRank with hub dampening): "
                    "symbols with file:line, edges between them, related vault notes, and graph staleness.",
-                   {"repo": ("string", "Repo folder name or slug under D:\\PROJECTS, or a path"),
+                   {"repo": ("string", "Repo folder name or slug under projects root, or a path"),
                     "query": ("string", "Symbol names or keywords"), "limit": ("integer", "Max symbols (default 15)")},
                    ["repo", "query"]),
     "hive_status": (tool_status, "Index size per project and freshness of each repo's code graph.", {}, []),

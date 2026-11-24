@@ -38,7 +38,7 @@ pub fn tool_list() -> Value {
                 "type": "object",
                 "required": ["project"],
                 "properties": {
-                    "project": {"type": "string", "description": "Project slug: folder name under D:\\PROJECTS, lowercased, spaces to hyphens"},
+                    "project": {"type": "string", "description": "Project slug: folder name under projects root, lowercased, spaces to hyphens"},
                     "task": {"type": "string", "description": "What you are about to do (optional, improves ranking)"},
                     "budget": {"type": "integer", "description": "Max tokens to return (default 1500)"}
                 },
@@ -70,7 +70,7 @@ pub fn tool_list() -> Value {
                 "type": "object",
                 "required": ["repo", "query"],
                 "properties": {
-                    "repo": {"type": "string", "description": "Repo folder name or slug under D:\\PROJECTS, or a path"},
+                    "repo": {"type": "string", "description": "Repo folder name or slug under projects root, or a path"},
                     "query": {"type": "string", "description": "Symbol names or keywords"},
                     "limit": {"type": "integer", "description": "Max symbols (default 15)"}
                 },

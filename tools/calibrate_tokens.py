@@ -40,7 +40,7 @@ refactoring impact analysis. All vault notes remain the single source of truth.
 SAMPLE_MIXED = """
 Run `python hive.py serve` to initialize the stdio JSON-RPC server.
 Configuration options:
-- `HIVE_VAULT`: Path to Obsidian vault (default: D:\\Valut\\OBS)
+- `HIVE_VAULT`: Path to Obsidian vault (e.g. ~/vault or %USERPROFILE%\vault)
 - `HIVE_PROJECTS`: Root folder for active repositories
 - `HIVE_PPR_FWD`: Forward edge weight (default: 0.7)
 - `HIVE_PPR_REV`: Reverse edge weight (default: 0.3)
