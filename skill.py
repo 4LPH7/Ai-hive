@@ -10,10 +10,25 @@ from pathlib import Path
 WORD_RE = re.compile(r"[^A-Za-z0-9]+")
 
 
+STOP_WORDS = {
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
+    "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
+    "by", "can", "did", "do", "does", "doing", "don", "down", "during", "each", "few", "for",
+    "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself",
+    "him", "himself", "his", "how", "if", "in", "into", "is", "it", "its", "itself", "just",
+    "me", "more", "most", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once",
+    "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she",
+    "should", "so", "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves",
+    "then", "there", "these", "they", "this", "those", "through", "to", "too", "under", "until",
+    "up", "very", "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom",
+    "why", "with", "you", "your", "yours", "yourself", "yourselves", "due"
+}
+
+
 def tokenize(text):
     if not text:
         return set()
-    return {w.lower() for w in WORD_RE.split(text) if len(w) > 1}
+    return {w.lower() for w in WORD_RE.split(text) if len(w) > 1 and w.lower() not in STOP_WORDS}
 
 
 class SkillMeta:
@@ -103,6 +118,11 @@ def parse_skill_md(file_path, root_type="custom"):
                 description = s[:300]
                 break
 
+    # Auto-extract triggers from description patterns if not explicitly provided
+    if not triggers and description:
+        m = re.findall(r'(?:use when|trigger on|when)\s+([^,.;\n]+)', description, re.I)
+        triggers = [t.strip().strip("'\"") for t in m if len(t.strip()) > 3]
+
     return SkillMeta(name=name, description=description, triggers=triggers, path=p, root_type=root_type)
 
 
@@ -115,10 +135,29 @@ def discover_skill_roots(custom_roots=None):
             if p.is_dir():
                 roots.append((p, "custom"))
 
+    # 1. Project local roots take top priority
+    cwd = Path.cwd()
+    proj_skills = cwd / ".agent" / "skills"
+    if proj_skills.is_dir():
+        roots.append((proj_skills, "project"))
+
+    proj_skills_alt = cwd / ".skills"
+    if proj_skills_alt.is_dir():
+        roots.append((proj_skills_alt, "project"))
+
+    codex_local = cwd / ".codex" / "skills"
+    if codex_local.is_dir():
+        roots.append((codex_local, "codex"))
+
+    claude_local = cwd / ".claude" / "skills"
+    if claude_local.is_dir():
+        roots.append((claude_local, "claude"))
+
+    # 2. User global roots
     home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
     if home:
         h = Path(home)
-        # 1. Antigravity / Gemini
+        # Antigravity / Gemini
         g_cfg = h / ".gemini" / "config" / "skills"
         if g_cfg.is_dir():
             roots.append((g_cfg, "antigravity"))
@@ -137,33 +176,15 @@ def discover_skill_roots(custom_roots=None):
             except OSError:
                 pass
 
-        # 2. Codex
+        # Codex
         codex_home = h / ".codex" / "skills"
         if codex_home.is_dir():
             roots.append((codex_home, "codex"))
 
-        # 3. Claude Code
+        # Claude Code
         claude_home = h / ".claude" / "skills"
         if claude_home.is_dir():
             roots.append((claude_home, "claude"))
-
-    # 4. Project local
-    cwd = Path.cwd()
-    proj_skills = cwd / ".agent" / "skills"
-    if proj_skills.is_dir():
-        roots.append((proj_skills, "project"))
-
-    proj_skills_alt = cwd / ".skills"
-    if proj_skills_alt.is_dir():
-        roots.append((proj_skills_alt, "project"))
-
-    codex_local = cwd / ".codex" / "skills"
-    if codex_local.is_dir():
-        roots.append((codex_local, "codex"))
-
-    claude_local = cwd / ".claude" / "skills"
-    if claude_local.is_dir():
-        roots.append((claude_local, "claude"))
 
     return roots
 
@@ -225,19 +246,21 @@ def score_skill(task, skill):
     if not task_toks:
         return 0.0
 
-    # 1. Exact trigger match (high weight multiplier)
+    def match_token(a, b):
+        return a == b or (len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a)))
+
+    # 1. Exact or high-overlap trigger match (high weight multiplier)
     trigger_hit = False
     for trig in skill.triggers:
-        if trig and trig in task_lower:
+        if trig and trig.lower() in task_lower:
             trigger_hit = True
             break
         trig_toks = tokenize(trig)
-        if trig_toks and trig_toks.issubset(task_toks):
-            trigger_hit = True
-            break
-
-    def match_token(a, b):
-        return a == b or (len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a)))
+        if trig_toks:
+            overlap = sum(1 for tt in trig_toks if any(match_token(tt, t) for t in task_toks))
+            if trig_toks.issubset(task_toks) or (len(trig_toks) >= 2 and overlap >= 2) or (len(trig_toks) == 1 and overlap == 1):
+                trigger_hit = True
+                break
 
     # 2. Name token overlap
     name_toks = tokenize(skill.name)

@@ -20,11 +20,25 @@ pub struct MatchResult {
     pub is_match: bool,
 }
 
+pub const STOP_WORDS: &[&str] = &[
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
+    "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
+    "by", "can", "did", "do", "does", "doing", "don", "down", "during", "each", "few", "for",
+    "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself",
+    "him", "himself", "his", "how", "if", "in", "into", "is", "it", "its", "itself", "just",
+    "me", "more", "most", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once",
+    "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she",
+    "should", "so", "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves",
+    "then", "there", "these", "they", "this", "those", "through", "to", "too", "under", "until",
+    "up", "very", "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom",
+    "why", "with", "you", "your", "yours", "yourself", "yourselves", "due",
+];
+
 pub fn tokenize(text: &str) -> HashSet<String> {
     let re = Regex::new(r"[^A-Za-z0-9_-]+").unwrap();
     re.split(text)
         .map(|s| s.to_lowercase())
-        .filter(|s| s.len() > 1)
+        .filter(|s| s.len() > 1 && !STOP_WORDS.contains(&s.as_str()))
         .collect()
 }
 
@@ -115,6 +129,16 @@ pub fn parse_skill_md(file_path: &Path, root_type: &str) -> Option<SkillMeta> {
         }
     }
 
+    if triggers.is_empty() && !description.is_empty() {
+        let re_use = Regex::new(r"(?i)(?:use when|trigger on|when)\s+([^,.;\n]+)").unwrap();
+        for cap in re_use.captures_iter(&description) {
+            let t = cap[1].trim().trim_matches('\'').trim_matches('"').trim();
+            if t.len() > 3 {
+                triggers.push(t.to_string());
+            }
+        }
+    }
+
     Some(SkillMeta {
         name,
         description,
@@ -134,6 +158,27 @@ pub fn discover_skill_roots(custom_roots: Option<&[PathBuf]>) -> Vec<(PathBuf, S
         }
     }
 
+    // 1. Project local roots take top priority
+    if let Ok(cwd) = std::env::current_dir() {
+        let proj_skills = cwd.join(".agent").join("skills");
+        if proj_skills.is_dir() {
+            roots.push((proj_skills, "project".to_string()));
+        }
+        let proj_skills_alt = cwd.join(".skills");
+        if proj_skills_alt.is_dir() {
+            roots.push((proj_skills_alt, "project".to_string()));
+        }
+        let codex_local = cwd.join(".codex").join("skills");
+        if codex_local.is_dir() {
+            roots.push((codex_local, "codex".to_string()));
+        }
+        let claude_local = cwd.join(".claude").join("skills");
+        if claude_local.is_dir() {
+            roots.push((claude_local, "claude".to_string()));
+        }
+    }
+
+    // 2. User global roots
     let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
     if let Some(h_str) = home {
         let h = PathBuf::from(h_str);
@@ -169,26 +214,6 @@ pub fn discover_skill_roots(custom_roots: Option<&[PathBuf]>) -> Vec<(PathBuf, S
         let claude_home = h.join(".claude").join("skills");
         if claude_home.is_dir() {
             roots.push((claude_home, "claude".to_string()));
-        }
-    }
-
-    // Project local
-    if let Ok(cwd) = std::env::current_dir() {
-        let proj_skills = cwd.join(".agent").join("skills");
-        if proj_skills.is_dir() {
-            roots.push((proj_skills, "project".to_string()));
-        }
-        let proj_skills_alt = cwd.join(".skills");
-        if proj_skills_alt.is_dir() {
-            roots.push((proj_skills_alt, "project".to_string()));
-        }
-        let codex_local = cwd.join(".codex").join("skills");
-        if codex_local.is_dir() {
-            roots.push((codex_local, "codex".to_string()));
-        }
-        let claude_local = cwd.join(".claude").join("skills");
-        if claude_local.is_dir() {
-            roots.push((claude_local, "claude".to_string()));
         }
     }
 
@@ -256,9 +281,14 @@ pub fn score_skill(task: &str, skill: &SkillMeta) -> f64 {
             break;
         }
         let trig_toks = tokenize(&t_low);
-        if !trig_toks.is_empty() && trig_toks.is_subset(&task_toks) {
-            trigger_hit = true;
-            break;
+        if !trig_toks.is_empty() {
+            let overlap = trig_toks.iter().filter(|tt| {
+                task_toks.iter().any(|t| t == *tt || (t.len() >= 4 && tt.len() >= 4 && (t.starts_with(*tt) || tt.starts_with(t))))
+            }).count();
+            if trig_toks.is_subset(&task_toks) || (trig_toks.len() >= 2 && overlap >= 2) || (trig_toks.len() == 1 && overlap == 1) {
+                trigger_hit = true;
+                break;
+            }
         }
     }
 
