@@ -47,6 +47,34 @@ class LintTest(unittest.TestCase):
         note(self.root, "CLAUDE.md", "@AGENTS.md", fm=False)
         self.assertEqual(codes(self.run_lint()), [])
 
+    def test_utf8_bom_does_not_hide_frontmatter(self):
+        path = note(self.root, "projects/demo/bom.md")
+        path.write_text("\ufeff" + path.read_text(encoding="utf-8"), encoding="utf-8")
+        self.assertNotIn("frontmatter-missing", codes(self.run_lint(), "projects/demo/bom.md"))
+
+    def test_secret_detection_uses_ace_pattern_and_is_error(self):
+        path = self.root / "projects/demo/secret.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(FM.format(type="note", status="active", updated="2026-11-24")
+                        + "token = sk-ant-abcdefghijklmnopqrstuvwxyz1234567890\n", encoding="utf-8")
+        findings = [f for f in self.run_lint() if f.path == "projects/demo/secret.md"]
+        secret = next(f for f in findings if f.code == "secret-detected")
+        self.assertEqual(secret.severity, "ERROR")
+
+    def test_source_missing_is_an_error_for_new_agent_notes(self):
+        note(self.root, "inbox/new.md", updated="2026-11-24")
+        finding = next(f for f in self.run_lint() if f.code == "source-missing")
+        self.assertEqual(finding.severity, "ERROR")
+
+    def test_lint_can_limit_findings_to_selected_paths(self):
+        note(self.root, "projects/demo/good.md")
+        path = self.root / "projects/demo/unselected.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(FM.format(type="note", status="active", updated="2026-11-24")
+                        + "token = sk-ant-abcdefghijklmnopqrstuvwxyz1234567890\n", encoding="utf-8")
+        findings = lint.lint(self.root, today="2026-11-23", only_paths={"projects/demo/good.md"})
+        self.assertFalse(any(f.path == "projects/demo/unselected.md" for f in findings))
+
     def test_line_caps(self):
         note(self.root, "projects/demo/_memory.md", "x\n" * 151, type="project-memory")
         note(self.root, "_meta/active-work.md", "x\n" * 41)
