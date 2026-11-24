@@ -138,7 +138,9 @@ class Index:
                     continue
                 meta, title, body = parse_note(text)
                 title = title or Path(rel).stem
-                project = meta.get("project") or (rel.split("/")[1] if rel.startswith("projects/") else "")
+                # The canonical directory, not agent-controlled frontmatter, defines project scope.
+                # This prevents a note placed under another project's folder from declaring itself "demo".
+                project = rel.split("/")[1] if rel.startswith("projects/") else (meta.get("project") or "")
                 self.db.execute("DELETE FROM notes_fts WHERE path=?", (rel,))
                 self.db.execute("INSERT OR REPLACE INTO notes VALUES(?,?,?,?,?,?,?,?)",
                                 (rel, mtime, project, meta.get("type", "note"), meta.get("status", "active"),
@@ -711,6 +713,8 @@ def validate_tool_arguments(name, args):
         valid = type(value) is int if expected == "integer" else isinstance(value, str) if expected == "string" else True
         if not valid:
             raise ValueError(f"{key} must be {expected}")
+    if name == "hive_context":
+        validate_project_slug(args["project"])
     if name == "hive_search" and args.get("scope", "project") not in {"project", "global", "all"}:
         raise ValueError("scope must be 'project', 'global' or 'all'")
     if name == "hive_context" and not 1 <= args.get("budget", 1500) <= 20000:
