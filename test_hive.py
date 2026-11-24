@@ -45,8 +45,10 @@ class VaultIndexTest(unittest.TestCase):
         self.assertIn("content", body)
 
     def test_project_scope_excludes_other_projects_and_keeps_global(self):
-        write(self.vault, "projects/other/private.md", type="note", status="active",
-              title="Private cache", body="other project data")
+        other = write(self.vault, "projects/other/private.md", type="note", status="active",
+                      title="Private cache", body="other project data")
+        other.write_text(other.read_text(encoding="utf-8").replace("project: demo", "project: demo"),
+                         encoding="utf-8")  # path scope must override conflicting frontmatter
         global_note = self.vault / "_meta/global.md"
         global_note.parent.mkdir(parents=True, exist_ok=True)
         global_note.write_text(NOTE.format(type="note", status="active", title="Global cache",
