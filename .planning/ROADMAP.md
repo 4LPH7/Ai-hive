@@ -73,3 +73,23 @@ Plans:
 5. Injects freshly loaded `SKILL.md` instructions and tool schemas directly into agent context.
 6. `hive_skill` MCP tool and CLI command operational in both Python and Rust cores.
 7. End-to-end integration test passes: task -> local miss -> remote find -> install -> inject.
+
+### Phase A — v2.1.1: Harden v2.1 & Lock the Rust Baseline (Complete ✓)
+**Goal**: Eliminate supply-chain attack surfaces, calibrate skill routing threshold, unify hooks, and benchmark Rust latency.
+Plans:
+- [x] 05-04: Supply-chain audit gate (Trojan Source Unicode, prompt injection, SHA-256 tree pinning)
+- [x] 05-05: Skill routing golden evaluation (`skill_golden.json`, 20 queries, 100% calibration)
+- [x] 05-06: Cross-platform `hive pre-commit` subcommand & latency benchmark lock (<1 ms cold start, 6-34 ms PPR)
+
+### Phase B — v2.2 (Backfilling M4): Deterministic Self-Improvement
+**Goal**: Close the intelligence loop by connecting session ledger data to objective outcome scoring and gap discovery.
+**Success Criteria**:
+1. Objective outcome scorer (`hive ledger score`): correlates sessions against git diffs, test exit codes, edit thrash.
+2. Weekly gap miner (`hive mine`): scans zero-hit queries and sub-threshold skill misses, drafting proposals into `inbox/`.
+3. Time decay & symbol-anchored staleness: decays unused playbook rules and flags stale architecture notes against graphify hashes.
+
+### Phase C — v2.5: Local Qwen3.5-2B Curator (Gated by Data)
+**Goal**: Optional zero-bloat Rust HTTP client talking to local model server (llama-server/Ollama on 127.0.0.1) once ledger reaches 30+ sessions.
+**Success Criteria**:
+1. Proposes paraphrase merges, contradiction flags, and sharpened lessons strictly into `inbox/`.
+2. Fails open cleanly whenever local model server is stopped, keeping `hive.exe` instant and self-contained.
