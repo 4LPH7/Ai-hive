@@ -1,6 +1,15 @@
+use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use regex::Regex;
 use chrono::NaiveDate;
+use sha2::{Digest, Sha256};
+
+pub fn sha256(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
+}
 
 pub fn slugify(name: &str) -> String {
     name.trim().to_lowercase().replace(' ', "-")
@@ -103,32 +112,187 @@ pub fn active_work_cell_matches(cell: &str, project_slug: &str) -> bool {
     candidates.iter().any(|c| c == project_slug)
 }
 
-pub fn default_vault() -> PathBuf {
-    std::env::var("HIVE_VAULT")
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HiveConfig {
+    pub vault: PathBuf,
+    pub projects: PathBuf,
+    pub db: PathBuf,
+}
+
+pub fn parse_toml_config(content: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('[') {
+            continue;
+        }
+        if let Some((k, v)) = trimmed.split_once('=') {
+            let key = k.trim().to_lowercase();
+            let val = v.trim().trim_matches('"').trim_matches('\'').trim();
+            map.insert(key, val.to_string());
+        }
+    }
+    map
+}
+
+pub fn find_default_config_path() -> Option<PathBuf> {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let p = PathBuf::from(appdata).join("hive").join("config.toml");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        let p = PathBuf::from(xdg).join("hive").join("config.toml");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
+    if let Some(h) = home {
+        let p = PathBuf::from(h).join(".config").join("hive").join("config.toml");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+pub fn load_config(
+    cli_vault: Option<PathBuf>,
+    cli_projects: Option<PathBuf>,
+    cli_db: Option<PathBuf>,
+    cli_config: Option<&Path>,
+) -> HiveConfig {
+    let config_path = cli_config
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(r"D:\Valut\OBS"))
+        .or_else(find_default_config_path);
+
+    let toml_data = if let Some(cp) = config_path {
+        fs::read_to_string(cp)
+            .map(|c| parse_toml_config(&c))
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| ".".to_string());
+
+    let vault = cli_vault
+        .or_else(|| std::env::var("HIVE_VAULT").ok().map(PathBuf::from))
+        .or_else(|| toml_data.get("vault").map(PathBuf::from))
+        .unwrap_or_else(|| {
+            if cfg!(windows) && Path::new(r"D:\Valut\OBS").exists() {
+                PathBuf::from(r"D:\Valut\OBS")
+            } else {
+                let doc = PathBuf::from(&home).join("Documents").join("Vault");
+                if doc.exists() {
+                    doc
+                } else {
+                    PathBuf::from(&home).join("Documents").join("Vault")
+                }
+            }
+        });
+
+    let projects = cli_projects
+        .or_else(|| std::env::var("HIVE_PROJECTS").ok().map(PathBuf::from))
+        .or_else(|| toml_data.get("projects").map(PathBuf::from))
+        .unwrap_or_else(|| {
+            if cfg!(windows) && Path::new(r"D:\PROJECTS").exists() {
+                PathBuf::from(r"D:\PROJECTS")
+            } else {
+                PathBuf::from(&home).join("Projects")
+            }
+        });
+
+    let db = cli_db
+        .or_else(|| std::env::var("HIVE_DB").ok().map(PathBuf::from))
+        .or_else(|| toml_data.get("db").map(PathBuf::from))
+        .unwrap_or_else(|| {
+            if cfg!(windows) {
+                let base = std::env::var("LOCALAPPDATA")
+                    .or_else(|_| std::env::var("TEMP"))
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("."));
+                base.join("hive").join("hive.sqlite")
+            } else {
+                let cache = std::env::var("XDG_CACHE_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from(&home).join(".cache"));
+                cache.join("hive").join("hive.sqlite")
+            }
+        });
+
+    HiveConfig { vault, projects, db }
+}
+
+pub fn default_vault() -> PathBuf {
+    load_config(None, None, None, None).vault
 }
 
 pub fn default_projects() -> PathBuf {
-    std::env::var("HIVE_PROJECTS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(r"D:\PROJECTS"))
+    load_config(None, None, None, None).projects
 }
 
 pub fn default_db_path() -> PathBuf {
-    if let Ok(p) = std::env::var("HIVE_DB") {
-        return PathBuf::from(p);
-    }
-    let base = std::env::var("LOCALAPPDATA")
-        .or_else(|_| std::env::var("TEMP"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    base.join("hive").join("hive.sqlite")
+    load_config(None, None, None, None).db
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sha256_vectors() {
+        assert_eq!(
+            sha256(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256(b"hello world"),
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+    }
+
+    #[test]
+    fn test_parse_toml_config() {
+        let content = r#"
+        # Sample configuration
+        [hive]
+        vault = "/custom/vault"
+        projects = "/custom/projects"
+        db = "/custom/db.sqlite"
+        "#;
+        let map = parse_toml_config(content);
+        assert_eq!(map.get("vault").unwrap(), "/custom/vault");
+        assert_eq!(map.get("projects").unwrap(), "/custom/projects");
+        assert_eq!(map.get("db").unwrap(), "/custom/db.sqlite");
+    }
+
+    #[test]
+    fn test_load_config_precedence() {
+        let toml_content = r#"
+        vault = "/toml/vault"
+        projects = "/toml/projects"
+        db = "/toml/db"
+        "#;
+        let tmp = std::env::temp_dir().join("test_hive_config.toml");
+        fs::write(&tmp, toml_content).unwrap();
+
+        // 1. TOML fallback when no CLI or ENV
+        let cfg1 = load_config(None, None, None, Some(&tmp));
+        assert_eq!(cfg1.vault, PathBuf::from("/toml/vault"));
+        assert_eq!(cfg1.projects, PathBuf::from("/toml/projects"));
+
+        // 2. CLI overrides TOML
+        let cfg2 = load_config(Some(PathBuf::from("/cli/vault")), None, None, Some(&tmp));
+        assert_eq!(cfg2.vault, PathBuf::from("/cli/vault"));
+        assert_eq!(cfg2.projects, PathBuf::from("/toml/projects"));
+
+        let _ = fs::remove_file(tmp);
+    }
 
     #[test]
     fn test_slug_and_traversal() {

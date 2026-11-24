@@ -1,6 +1,6 @@
 use ai_hive::ace::{apply, format_bullets, load, save, select_bullets, DeltaOps};
 use ai_hive::bench::run_bench;
-use ai_hive::common::{default_db_path, default_vault};
+use ai_hive::common::{default_db_path, load_config};
 use ai_hive::eval::run_eval;
 use ai_hive::index::Index;
 use ai_hive::lint::{format_report, git_staged_files, lint};
@@ -14,6 +14,15 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "hive", version = "1.2.0", about = "High-performance shared memory for AI coding agents")]
 struct Cli {
+    #[arg(long, global = true)]
+    vault: Option<PathBuf>,
+    #[arg(long, global = true)]
+    projects: Option<PathBuf>,
+    #[arg(long, global = true)]
+    db: Option<PathBuf>,
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -98,12 +107,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return serve(None, None).map_err(|e| e.into());
     } else {
         let cli = Cli::parse();
+        let cfg = load_config(cli.vault, cli.projects, cli.db, cli.config.as_deref());
         match cli.command.unwrap_or(Commands::Serve { vault: None, db: None }) {
             Commands::Serve { vault, db } => {
-                serve(vault, db)?;
+                serve(vault.or(Some(cfg.vault)), db.or(Some(cfg.db)))?;
             }
             Commands::Search { query, project, scope, limit } => {
-                let mut idx = Index::new(None, None)?;
+                let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 let proj = project.as_deref().unwrap_or("");
                 let hits = idx.search(&query, proj, limit, &scope)?;
                 if hits.is_empty() {
@@ -115,24 +125,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Commands::Graph { repo, query, limit } => {
-                let mut idx = Index::new(None, None)?;
+                let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 let res = tool_graph(&mut idx, &repo, &query, limit)?;
                 println!("{}", res);
             }
             Commands::Context { project, task, budget } => {
-                let mut idx = Index::new(None, None)?;
+                let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 let t = task.as_deref().unwrap_or("");
                 let res = tool_context(&mut idx, &project, t, budget)?;
                 println!("{}", res);
             }
             Commands::Status => {
-                let mut idx = Index::new(None, None)?;
+                let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 idx.refresh(true)?;
                 let total: i64 = idx.conn.query_row("SELECT count(*) FROM notes", [], |r| r.get(0)).unwrap_or(0);
                 println!("vault {}: {} notes indexed ({})", idx.vault.display(), total, default_db_path().display());
             }
             Commands::Lint { vault, staged } => {
-                let v = vault.unwrap_or_else(default_vault);
+                let v = vault.unwrap_or_else(|| cfg.vault.clone());
                 let staged_set = if staged {
                     let files = git_staged_files(&v);
                     Some(files.into_iter().collect::<HashSet<String>>())
@@ -146,18 +156,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Commands::Eval { golden, k } => {
-                let mut idx = Index::new(None, None)?;
+                let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 let golden_p = golden.unwrap_or_else(|| PathBuf::from("eval_golden.json"));
                 let res = run_eval(&mut idx, &golden_p, k)?;
                 println!("{}", res);
             }
             Commands::Bench => {
-                let mut idx = Index::new(None, None)?;
+                let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 let res = run_bench(&mut idx)?;
                 println!("{}", res);
             }
             Commands::Ace { cmd } => {
-                let vault = default_vault();
+                let vault = cfg.vault;
                 match cmd {
                     AceCommands::Apply { scope, ops_file } => {
                         let json_str = if let Some(path) = ops_file {

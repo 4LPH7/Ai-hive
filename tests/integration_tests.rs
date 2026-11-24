@@ -38,3 +38,44 @@ fn test_milestone1_regression_f10_secret_detection() {
     assert!(is_secret("ghp_012345678901234567890123456789"));
     assert!(!is_secret("no secret here, just normal safe text"));
 }
+
+#[test]
+fn test_sync_01_hash_verified_refresh() {
+    let tmp = std::env::temp_dir().join(format!("hive_sync_test_{}", std::process::id()));
+    let vault = tmp.join("vault");
+    let proj_dir = vault.join("projects").join("demo");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+
+    let note_path = proj_dir.join("test.md");
+    std::fs::write(&note_path, "---\ntype: note\nproject: demo\n---\n# Original\n\nInitial content\n").unwrap();
+
+    let db_path = tmp.join("hive.sqlite");
+    let mut idx = ai_hive::index::Index::new(Some(vault.clone()), Some(db_path)).unwrap();
+
+    // Initial indexing
+    let changed = idx.refresh(true).unwrap();
+    assert_eq!(changed, 1);
+    let hits = idx.search("initial", "demo", 5, "project").unwrap();
+    assert_eq!(hits.len(), 1);
+
+    // Mtime touch with identical content -> hash matches, 0 reindexed
+    let meta = std::fs::metadata(&note_path).unwrap();
+    let mtime = meta.modified().unwrap();
+    let later = mtime + std::time::Duration::from_secs(10);
+    let file = std::fs::File::options().write(true).open(&note_path).unwrap();
+    let _ = file.set_modified(later);
+    drop(file);
+
+    let changed2 = idx.refresh(true).unwrap();
+    assert_eq!(changed2, 0);
+
+    // Content edit -> hash changes -> reindexed cleanly
+    std::fs::write(&note_path, "---\ntype: note\nproject: demo\n---\n# Changed\n\nNew flamingo content\n").unwrap();
+    let changed3 = idx.refresh(true).unwrap();
+    assert_eq!(changed3, 1);
+    let hits2 = idx.search("flamingo", "demo", 5, "project").unwrap();
+    assert_eq!(hits2.len(), 1);
+
+    // Clean up
+    let _ = std::fs::remove_dir_all(&tmp);
+}

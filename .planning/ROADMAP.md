@@ -6,7 +6,7 @@ Comprehensive engineering roadmap transitioning `ai-hive` from Python prototype 
 ## Phases
 
 - [x] **Phase 1: Correctness, Security & Regression Lock (v1.1)** - Fixed path traversal, quota packing, isolation, directed graphs, secrets, BOM.
-- [ ] **Phase 2: Portability, Packaging, Rust Core & CI Harness (v1.2)** - Rust standalone binary, unified config, SHA-256 refresh, and public CI matrix.
+- [x] **Phase 2: Portability, Packaging, Rust Core & CI Harness (v1.2)** - Rust standalone binary, unified config, SHA-256 refresh, and public CI matrix.
 - [ ] **Phase 3: Learning Foundation & Cross-Agent Parity (v1.5)** - ACE counter split, atomic locks, JSONL session ledger, and reflection parity.
 - [ ] **Phase 4: Evidence-Gated Intelligence & Scale (v2.0)** - Objective outcome rewards, auto-decay, and inbox LLM curator.
 - [ ] **Phase 5: Auto-Skill Discovery, Selection & Dynamic Installation Engine (v2.1)** - Intelligent local skill ranking, remote registry search (find-skills), and dynamic installation for agents.
@@ -25,6 +25,7 @@ Comprehensive engineering roadmap transitioning `ai-hive` from Python prototype 
 ### Phase 2: Portability, Packaging, Rust Core & CI Harness (v1.2)
 **Goal**: High-performance native binary, clean packaging, unified config, and hash-verified refresh.
 **Requirements**: [RUST-01, CONF-01, SYNC-01, CI-01, SHIM-01]
+**Status**: Completed ✓
 **Success Criteria**:
 1. Standalone `hive` binary with bundled SQLite + FTS5 passes all unit tests (Recall@5 1.00, MRR ≥0.85).
 2. Configuration resolves cleanly via CLI, ENV, and OS cache defaults.
@@ -33,8 +34,8 @@ Comprehensive engineering roadmap transitioning `ai-hive` from Python prototype 
 
 Plans:
 - [x] 02-01: Build standalone Rust crate with bundled SQLite FTS5 and MCP stdio engine
-- [ ] 02-02: Implement unified config hierarchy and SHA-256 hash-verified refresh
-- [ ] 02-03: Add cross-agent CLI shims and finalize packaging
+- [x] 02-02: Implement unified config hierarchy and SHA-256 hash-verified refresh
+- [x] 02-03: Add cross-agent CLI shims and finalize packaging
 
 ### Phase 3: Learning Foundation & Cross-Agent Parity (v1.5)
 **Goal**: Honest, atomic ACE self-improvement loop shared across all coding agents.

@@ -400,23 +400,22 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
 }
 
 pub fn format_report(findings: &[Finding]) -> String {
-    if findings.is_empty() {
-        return "vault lint: clean (0 findings)".to_string();
-    }
-    let mut errors = 0usize;
-    let mut warns = 0usize;
-    let mut lines = Vec::new();
-
+    let mut counts = [0usize; 3]; // ERROR (0), WARN (1), INFO (2)
     for f in findings {
-        if f.severity == "ERROR" {
-            errors += 1;
-        } else if f.severity == "WARN" {
-            warns += 1;
+        match f.severity.as_str() {
+            "ERROR" => counts[0] += 1,
+            "WARN" => counts[1] += 1,
+            _ => counts[2] += 1,
         }
-        lines.push(format!("{}: [{}] {}: {}", f.severity, f.code, f.path, f.message));
     }
-
-    lines.push(format!("\nTotal: {} errors, {} warnings", errors, warns));
+    let head = format!("lint: {} error, {} warn, {} info", counts[0], counts[1], counts[2]);
+    if findings.is_empty() {
+        return head;
+    }
+    let mut lines = vec![head];
+    for f in findings {
+        lines.push(format!("{:5} {:20} {}: {}", f.severity, f.code, f.path, f.message));
+    }
     lines.join("\n")
 }
 

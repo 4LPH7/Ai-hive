@@ -1,4 +1,4 @@
-use crate::common::{default_db_path, default_vault, is_relative_to};
+use crate::common::{default_db_path, default_vault, is_relative_to, sha256};
 use regex::Regex;
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
@@ -114,14 +114,14 @@ impl Index {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap_or(0);
 
-        if user_version != 3 {
+        if user_version != 4 {
             conn.execute_batch(
-                "DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS notes_fts; PRAGMA user_version=3;",
+                "DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS notes_fts; PRAGMA user_version=4;",
             ).map_err(|e| e.to_string())?;
         }
 
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS notes(path TEXT PRIMARY KEY, mtime REAL, project TEXT,
+            "CREATE TABLE IF NOT EXISTS notes(path TEXT PRIMARY KEY, mtime REAL, size INTEGER, sha256 TEXT, project TEXT,
                 type TEXT, status TEXT, agent TEXT, updated TEXT, source TEXT, title TEXT);
              CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
                 path UNINDEXED, title, meta, body, tokenize='porter unicode61');",
@@ -137,8 +137,8 @@ impl Index {
     pub fn in_memory() -> Result<Self, String> {
         let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
         conn.execute_batch(
-            "PRAGMA user_version=3;
-             CREATE TABLE IF NOT EXISTS notes(path TEXT PRIMARY KEY, mtime REAL, project TEXT,
+            "PRAGMA user_version=4;
+             CREATE TABLE IF NOT EXISTS notes(path TEXT PRIMARY KEY, mtime REAL, size INTEGER, sha256 TEXT, project TEXT,
                 type TEXT, status TEXT, agent TEXT, updated TEXT, source TEXT, title TEXT);
              CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
                 path UNINDEXED, title, meta, body, tokenize='porter unicode61');",
@@ -184,17 +184,24 @@ impl Index {
         }
         self.last_refresh = Some(now);
 
-        let mut known: HashMap<String, f64> = HashMap::new();
+        let mut known: HashMap<String, (f64, i64, String)> = HashMap::new();
         {
             let mut stmt = self
                 .conn
-                .prepare("SELECT path, mtime FROM notes")
+                .prepare("SELECT path, mtime, size, sha256 FROM notes")
                 .map_err(|e| e.to_string())?;
             let rows = stmt
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, f64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
                 .map_err(|e| e.to_string())?;
             for r in rows.flatten() {
-                known.insert(r.0, r.1);
+                known.insert(r.0, (r.1, r.2, r.3));
             }
         }
 
@@ -212,18 +219,20 @@ impl Index {
             seen.insert(rel.clone());
 
             let meta_res = fs::metadata(&full_path);
-            let mtime = match meta_res {
+            let (mtime, size) = match meta_res {
                 Ok(m) => {
-                    let dur = m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                    let dur = m
+                        .modified()
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
                         .duration_since(std::time::SystemTime::UNIX_EPOCH)
                         .unwrap_or_default();
-                    dur.as_secs_f64()
+                    (dur.as_secs_f64(), m.len() as i64)
                 }
                 Err(_) => continue,
             };
 
-            if let Some(&k_mtime) = known.get(&rel) {
-                if (k_mtime - mtime).abs() < 1e-4 {
+            if let Some((k_mtime, k_size, _)) = known.get(&rel) {
+                if (k_mtime - mtime).abs() < 1e-4 && *k_size == size {
                     continue;
                 }
             }
@@ -232,6 +241,19 @@ impl Index {
                 Ok(t) => t,
                 Err(_) => continue,
             };
+
+            let hash = sha256(text.as_bytes());
+
+            if let Some((_, _, k_hash)) = known.get(&rel) {
+                if k_hash == &hash {
+                    tx.execute(
+                        "UPDATE notes SET mtime = ?, size = ? WHERE path = ?",
+                        params![mtime, size, &rel],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    continue;
+                }
+            }
 
             let (meta, parsed_title, body) = parse_note(&text);
             let title = if !parsed_title.is_empty() {
@@ -262,8 +284,8 @@ impl Index {
                 .map_err(|e| e.to_string())?;
 
             tx.execute(
-                "INSERT OR REPLACE INTO notes VALUES(?,?,?,?,?,?,?,?,?)",
-                params![&rel, mtime, &project, &ntype, &status, &agent, &updated, &source, &title],
+                "INSERT OR REPLACE INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                params![&rel, mtime, size, &hash, &project, &ntype, &status, &agent, &updated, &source, &title],
             ).map_err(|e| e.to_string())?;
 
             let rel_words: Vec<&str> = rel.trim_end_matches(".md")

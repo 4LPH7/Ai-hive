@@ -547,7 +547,8 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                         "content": [{
                             "type": "text",
                             "text": content
-                        }]
+                        }],
+                        "isError": false
                     }
                 })),
                 Err(err_msg) => Some(json!({

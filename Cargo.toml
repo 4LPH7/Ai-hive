@@ -17,6 +17,7 @@ regex = "1.10"
 clap = { version = "4.5", features = ["derive"] }
 chrono = "0.4"
 walkdir = "2.5"
+sha2 = "0.10"
 
 [profile.release]
 opt-level = 3

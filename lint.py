@@ -236,4 +236,8 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    native = hive.find_native_binary()
+    if native:
+        import subprocess
+        sys.exit(subprocess.call([native, "lint", *sys.argv[1:]]))
     sys.exit(main(sys.argv[1:]))

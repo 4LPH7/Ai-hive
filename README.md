@@ -45,18 +45,65 @@ flowchart LR
 
 ## Quick start
 
+### Option A: Standalone Rust Binary (Recommended, <1 ms startup)
 ```bash
 git clone https://github.com/4LPH7/ai-hive.git
 cd ai-hive
-python -m unittest                       # 35 tests, stdlib only
-set HIVE_VAULT=D:\path\to\vault          # or export on macOS/Linux
-python hive.py status                    # index the vault, list graphs
-python hive.py search "why sqlite"       # BM25 over notes
-python hive.py lint                      # vault health report
+cargo build --release                    # produces target/release/hive (.exe)
+cargo test                              # 21 unit + integration tests
+./target/release/hive status            # index the vault, list freshness
 ```
 
-Then register `python -I /path/to/ai-hive/hive.py serve` as an MCP server in each agent.
-[docs/setup.md](docs/setup.md) walks through the full installation, step by step.
+### Option B: Pure Python (Stdlib only, zero install)
+```bash
+python -m unittest                      # 63 tests passing
+python hive.py status                   # automatically uses native binary if compiled!
+set HIVE_FORCE_PYTHON=1                 # force pure Python fallback anytime
+```
+
+## Configuration Hierarchy (CONF-01)
+
+Hive resolves configuration paths using a strict 4-level priority chain:
+
+1. **CLI Flags**: `--vault <path>`, `--projects <path>`, `--db <path>`, `--config <file>`
+2. **Environment Variables**: `HIVE_VAULT`, `HIVE_PROJECTS`, `HIVE_DB`
+3. **User Config (`config.toml`)**:
+   - Windows: `%APPDATA%\hive\config.toml` or `~/.config/hive/config.toml`
+   - Linux/macOS: `~/.config/hive/config.toml`
+   ```toml
+   vault = "/path/to/Obsidian/Vault"
+   projects = "/path/to/Projects"
+   db = "/path/to/cache/hive.sqlite"
+   ```
+4. **Platform Defaults**:
+   - Windows: `D:\Valut\OBS` if present, else `~/Documents/Vault`; `%LOCALAPPDATA%\hive\hive.sqlite`
+   - Linux/macOS: `~/Documents/Vault`; `~/.cache/hive/hive.sqlite`
+
+## Agent MCP Registration
+
+### Antigravity (`~/.gemini/antigravity/mcp.json`)
+```json
+{
+  "mcpServers": {
+    "hive": {
+      "command": "d:/PROJECTS/Ai-hive/target/release/hive.exe",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+### Claude Code (`~/.claude/settings.json` or CLI)
+```bash
+claude mcp add hive -- d:/PROJECTS/Ai-hive/target/release/hive.exe serve
+```
+
+### Codex (`~/.codex/config.toml`)
+```toml
+[mcp.servers.hive]
+command = "d:/PROJECTS/Ai-hive/target/release/hive.exe"
+args = ["serve"]
+```
 
 ## MCP tools
 

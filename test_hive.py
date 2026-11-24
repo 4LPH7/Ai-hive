@@ -299,6 +299,79 @@ class Milestone1RegressionTest(unittest.TestCase):
         self.assertIn("must be integer", r3["result"]["content"][0]["text"])
 
 
+class ConfigAndHashSyncTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.vault = self.root / "vault"
+        self.vault.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.root / "hive.sqlite"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_load_config_precedence(self):
+        toml_path = self.root / "config.toml"
+        toml_path.write_text('vault = "/toml/vault"\nprojects = "/toml/projects"\ndb = "/toml/db"\n', encoding="utf-8")
+
+        # 1. TOML fallback when no CLI or ENV
+        old_env = {k: os.environ.pop(k, None) for k in ["HIVE_VAULT", "HIVE_PROJECTS", "HIVE_DB"]}
+        try:
+            cfg1 = hive.load_config(cli_config=str(toml_path))
+            self.assertEqual(cfg1["vault"], Path("/toml/vault"))
+            self.assertEqual(cfg1["projects"], Path("/toml/projects"))
+
+            # 2. ENV overrides TOML
+            os.environ["HIVE_VAULT"] = "/env/vault"
+            cfg2 = hive.load_config(cli_config=str(toml_path))
+            self.assertEqual(cfg2["vault"], Path("/env/vault"))
+            self.assertEqual(cfg2["projects"], Path("/toml/projects"))
+
+            # 3. CLI overrides ENV & TOML
+            cfg3 = hive.load_config(cli_vault="/cli/vault", cli_config=str(toml_path))
+            self.assertEqual(cfg3["vault"], Path("/cli/vault"))
+            self.assertEqual(cfg3["projects"], Path("/toml/projects"))
+        finally:
+            for k, v in old_env.items():
+                if v is not None:
+                    os.environ[k] = v
+
+    def test_mtime_touch_without_content_change_skips_fts_reindex(self):
+        p = write(self.vault, "projects/demo/note1.md", type="note", status="active",
+                  title="Note One", body="Stable body text.")
+        idx = hive.Index(self.vault, self.db_path)
+        self.assertEqual(idx.refresh(force=True), 1)
+
+        # Touch mtime +10s without modifying content
+        st = p.stat()
+        os.utime(p, (st.st_atime, st.st_mtime + 10))
+
+        # Refresh: hash matches existing, so changed count is 0 and no FTS reindexing occurs
+        changed = idx.refresh(force=True)
+        self.assertEqual(changed, 0)
+        idx.db.close()
+
+    def test_content_change_with_preserved_mtime_reindexes_cleanly(self):
+        p = write(self.vault, "projects/demo/note2.md", type="note", status="active",
+                  title="Original Title", body="Original body keywords.")
+        idx = hive.Index(self.vault, self.db_path)
+        self.assertEqual(idx.refresh(force=True), 1)
+        self.assertTrue(idx.search("keywords"))
+
+        # Preserve mtime, change content
+        st = p.stat()
+        orig_mtime = st.st_mtime
+        write(self.vault, "projects/demo/note2.md", type="note", status="active",
+              title="Updated Title", body="Brand new flamingo content.")
+        os.utime(p, (st.st_atime, orig_mtime))
+
+        # Refresh detects size or content change and updates index
+        idx.refresh(force=True)
+        self.assertTrue(idx.search("flamingo"))
+        self.assertFalse(idx.search("keywords"))
+        idx.db.close()
+
+
 class StdioTest(unittest.TestCase):
     def test_serve_round_trip_over_stdio(self):
         import subprocess

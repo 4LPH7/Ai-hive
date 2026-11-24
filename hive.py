@@ -8,6 +8,7 @@ and graphify code graphs. Stdlib only (Python 3.10+), read-only, MCP over stdio.
     python hive.py status                     index and graph freshness
     python hive.py lint                       vault health report (see lint.py)
 """
+import hashlib
 import json
 import math
 import os
@@ -30,15 +31,80 @@ def canonical_path(p):
     except (ValueError, OSError):
         return Path(p)
 
-VAULT = Path(os.environ.get("HIVE_VAULT", r"D:\Valut\OBS"))
-PROJECTS = Path(os.environ.get("HIVE_PROJECTS", r"D:\PROJECTS"))
-DB_PATH = Path(os.environ.get("HIVE_DB") or Path(
-    os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or os.getcwd()) / "hive" / "hive.sqlite")
+def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_config=None):
+    """Hierarchical config: CLI flags -> ENV vars -> config.toml -> OS defaults."""
+    config_data = {}
+    config_file = Path(cli_config) if cli_config else None
+    if not config_file:
+        appdata = os.environ.get("APPDATA")
+        home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+        candidates = []
+        if appdata:
+            candidates.append(Path(appdata) / "hive" / "config.toml")
+        if home:
+            candidates.append(Path(home) / ".config" / "hive" / "config.toml")
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        if xdg:
+            candidates.append(Path(xdg) / "hive" / "config.toml")
+        for c in candidates:
+            if c.is_file():
+                config_file = c
+                break
+    if config_file and config_file.is_file():
+        try:
+            for line in config_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith(("#", "[")):
+                    continue
+                k, sep, v = line.partition("=")
+                if sep:
+                    config_data[k.strip().lower()] = v.strip().strip("'\"")
+        except OSError:
+            pass
+
+    vault = cli_vault or os.environ.get("HIVE_VAULT") or config_data.get("vault")
+    if not vault:
+        if sys.platform == "win32" and Path(r"D:\Valut\OBS").exists():
+            vault = r"D:\Valut\OBS"
+        else:
+            home = os.environ.get("USERPROFILE") or os.environ.get("HOME") or "."
+            doc_vault = Path(home) / "Documents" / "Vault"
+            vault = str(doc_vault if doc_vault.exists() else Path(home) / "Documents" / "Vault")
+
+    projects = cli_projects or os.environ.get("HIVE_PROJECTS") or config_data.get("projects")
+    if not projects:
+        if sys.platform == "win32" and Path(r"D:\PROJECTS").exists():
+            projects = r"D:\PROJECTS"
+        else:
+            home = os.environ.get("USERPROFILE") or os.environ.get("HOME") or "."
+            projects = str(Path(home) / "Projects")
+
+    db = cli_db or os.environ.get("HIVE_DB") or config_data.get("db")
+    if not db:
+        if sys.platform == "win32":
+            base = os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or "."
+            db = str(Path(base) / "hive" / "hive.sqlite")
+        else:
+            xdg_cache = os.environ.get("XDG_CACHE_HOME")
+            base = xdg_cache or (Path(os.environ.get("HOME", ".")) / ".cache")
+            db = str(Path(base) / "hive" / "hive.sqlite")
+
+    return {
+        "vault": Path(vault),
+        "projects": Path(projects),
+        "db": Path(db),
+    }
+
+
+CFG = load_config()
+VAULT = CFG["vault"]
+PROJECTS = CFG["projects"]
+DB_PATH = CFG["db"]
 SKIP_DIRS = {".git", ".obsidian", ".claude", ".agents", ".trash", "Python", "_attachments", "graph", "node_modules", "templates", "_template", ".claude-flow"}
 REFRESH_EVERY_S = 2.0
 TYPE_PRIOR = {"project-memory": 1.4, "adr": 1.25, "note": 1.0, "journal": 0.8}
 STATUS_PRIOR = {"superseded": 0.3, "archived": 0.4}
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 PROJECT_BOOST = 2.0  # eval 2026-11-16: 1.5 -> 28/30, 2.0 -> 29/30 (higher gives no further gain)
 AUTOCUT_RATIO = 0.30  # keep hits >= 30% of the best; eval 2026-11-23: 0.35 cut a rank-4 answer (29/30), 0.30 -> 30/30, +0.3 hits
 SERVER_INFO = {"name": "hive", "version": "1.1.0"}
@@ -140,12 +206,12 @@ class Index:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(db_path), timeout=10, check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
-        if self.db.execute("PRAGMA user_version").fetchone()[0] != 3:
+        if self.db.execute("PRAGMA user_version").fetchone()[0] != 4:
             # derived index: a schema change just rebuilds it from the vault
             self.db.executescript("DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS notes_fts;")
-            self.db.execute("PRAGMA user_version=3")
+            self.db.execute("PRAGMA user_version=4")
         self.db.executescript("""
-            CREATE TABLE IF NOT EXISTS notes(path TEXT PRIMARY KEY, mtime REAL, project TEXT,
+            CREATE TABLE IF NOT EXISTS notes(path TEXT PRIMARY KEY, mtime REAL, size INTEGER, sha256 TEXT, project TEXT,
                 type TEXT, status TEXT, agent TEXT, updated TEXT, source TEXT, title TEXT);
             CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
                 path UNINDEXED, title, meta, body, tokenize='porter unicode61');
@@ -163,31 +229,36 @@ class Index:
                     yield entry
 
     def refresh(self, force=False):
-        """Re-index notes whose mtime changed; drop deleted ones. Returns changed count."""
+        """Re-index notes whose mtime or size changed; drop deleted ones. Returns changed count."""
         now = time.monotonic()
         if not force and now - self._last_refresh < REFRESH_EVERY_S:
             return 0
         self._last_refresh = now
-        known = dict(self.db.execute("SELECT path, mtime FROM notes"))
+        known = {r[0]: (r[1], r[2], r[3]) for r in self.db.execute("SELECT path, mtime, size, sha256 FROM notes")}
         seen, changed = set(), 0
         with self.db:
             for entry in self._walk():
                 rel = Path(entry.path).relative_to(self.vault).as_posix()
                 seen.add(rel)
-                mtime = entry.stat().st_mtime
-                if known.get(rel) == mtime:
+                st = entry.stat()
+                mtime, size = st.st_mtime, st.st_size
+                if rel in known and known[rel][0] == mtime and known[rel][1] == size:
                     continue
                 try:
                     text = Path(entry.path).read_text(encoding="utf-8-sig", errors="replace")
                 except OSError as exc:
                     print(f"hive: skip {rel}: {exc}", file=sys.stderr)
                     continue
+                h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                if rel in known and known[rel][2] == h:
+                    self.db.execute("UPDATE notes SET mtime=?, size=? WHERE path=?", (mtime, size, rel))
+                    continue
                 meta, title, body = parse_note(text)
                 title = title or Path(rel).stem
                 project = meta.get("project") or (rel.split("/")[1] if rel.startswith("projects/") else "")
                 self.db.execute("DELETE FROM notes_fts WHERE path=?", (rel,))
-                self.db.execute("INSERT OR REPLACE INTO notes VALUES(?,?,?,?,?,?,?,?,?)",
-                                (rel, mtime, project, meta.get("type", "note"), meta.get("status", "active"),
+                self.db.execute("INSERT OR REPLACE INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                                (rel, mtime, size, h, project, meta.get("type", "note"), meta.get("status", "active"),
                                  meta.get("agent", ""), meta.get("updated", ""), meta.get("source", ""), title))
                 # meta field: project, type and path words, so "fpolink adr mandi" matches on context
                 meta_text = " ".join([project, meta.get("type", "note"), *re.split(r"[/_.\-]+", rel[:-3])])
@@ -940,5 +1011,34 @@ def main(argv):
     return 0
 
 
+def find_native_binary():
+    """Find native compiled hive binary if available."""
+    if os.environ.get("HIVE_FORCE_PYTHON") == "1":
+        return None
+    env_bin = os.environ.get("HIVE_BIN")
+    if env_bin and os.path.isfile(env_bin):
+        return env_bin
+
+    bin_name = "hive.exe" if sys.platform == "win32" else "hive"
+    release_bin = Path(__file__).resolve().parent / "target" / "release" / bin_name
+    if release_bin.is_file():
+        return str(release_bin)
+
+    local_bin = Path(__file__).resolve().parent / bin_name
+    if local_bin.is_file():
+        return str(local_bin)
+
+    import shutil
+    on_path = shutil.which("hive")
+    if on_path and os.path.isfile(on_path):
+        return on_path
+
+    return None
+
+
 if __name__ == "__main__":
+    native = find_native_binary()
+    if native:
+        import subprocess
+        sys.exit(subprocess.call([native, *sys.argv[1:]]))
     sys.exit(main(sys.argv[1:]))

@@ -20,6 +20,9 @@ import time
 import uuid
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hive
+
 VAULT = Path(os.environ.get("HIVE_VAULT", r"D:\Valut\OBS"))
 PROJECTS = Path(os.environ.get("HIVE_PROJECTS", r"D:\PROJECTS"))
 STATE_PATH = Path(os.environ.get("HIVE_ACE_STATE") or Path(
@@ -400,4 +403,10 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    native = hive.find_native_binary()
+    if native and len(sys.argv) > 1 and sys.argv[1] in ("apply", "show", "hook-start", "hook-stop"):
+        import subprocess
+        cmd = sys.argv[1]
+        rust_cmd = "hook-start" if cmd == "hook-start" else "hook-stop" if cmd == "hook-stop" else cmd
+        sys.exit(subprocess.call([native, "ace", rust_cmd, *sys.argv[2:]]))
     sys.exit(main(sys.argv[1:]))
