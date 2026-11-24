@@ -1218,26 +1218,6 @@ def tool_curate(*args):
     return "\n".join(lines)
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
-    cmd, *rest = argv or ["serve"]
-    if cmd == "serve":
-        return serve()
-    commands = {
-        "search": tool_search, "graph": tool_graph, "context": tool_context,
-        "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
-        "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine, "curate": tool_curate,
-    }
-    if cmd not in commands:
-        print(__doc__)
-        return 2
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(commands[cmd](*rest))
-    return 0
-
-
 def find_native_binary():
     """Find native compiled hive binary if available."""
     if os.environ.get("HIVE_FORCE_PYTHON") == "1":
@@ -1263,12 +1243,32 @@ def find_native_binary():
     return None
 
 
-if __name__ == "__main__":
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
     native = find_native_binary()
     if native:
         import subprocess
         try:
-            sys.exit(subprocess.call([native, *sys.argv[1:]]))
+            return subprocess.call([native, *argv])
         except Exception:
             pass
-    sys.exit(main(sys.argv[1:]))
+    cmd, *rest = argv or ["serve"]
+    if cmd == "serve":
+        return serve()
+    commands = {
+        "search": tool_search, "graph": tool_graph, "context": tool_context,
+        "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
+        "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
+        "mine": tool_mine, "curate": tool_curate,
+    }
+    if cmd not in commands:
+        print(__doc__)
+        return 2
+    sys.stdout.reconfigure(encoding="utf-8")
+    print(commands[cmd](*rest))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

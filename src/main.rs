@@ -12,7 +12,7 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "hive", version = "1.2.0", about = "High-performance shared memory for AI coding agents")]
+#[command(name = "hive", version, about = "High-performance shared memory for AI coding agents")]
 struct Cli {
     #[arg(long, global = true)]
     vault: Option<PathBuf>,
