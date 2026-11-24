@@ -40,11 +40,17 @@ Plans:
 ### Phase 3: Learning Foundation & Cross-Agent Parity (v1.5)
 **Goal**: Honest, atomic ACE self-improvement loop shared across all coding agents.
 **Requirements**: [ACE-01, LOCK-01, LEDG-01, HOOK-01]
+**Status**: Ready
 **Success Criteria**:
 1. Separate `seen` count from `helpful`/`harmful` feedback.
 2. Concurrent ACE updates keep 50/50 bullets via atomic lockfile.
 3. Local JSONL session ledger records injected bullets and query logs outside vault.
 4. Codex and Antigravity reflection parity feeds the shared ledger.
+
+Plans:
+- [ ] 03-01: Atomic Lockfile & Counter Split Parity in Rust Core
+- [ ] 03-02: Cross-Agent Session Ledger (`ledger.jsonl`)
+- [ ] 03-03: Cross-Agent Session Hooks & Reflection Parity
 
 ### Phase 4: Evidence-Gated Intelligence & Scale (v2.0)
 **Goal**: Self-optimization unlocked strictly when usage data justifies cost.

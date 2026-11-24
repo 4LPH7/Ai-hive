@@ -17,10 +17,11 @@ High-performance, deterministic memory retrieval and playbook curation with Mark
 - ✓ **SEC-02**: Pre-commit secret scanning & untrusted provenance note framing [Milestone 1 - F10/F14]
 - ✓ **MCP-01**: Strict tool schema validation and JSON-RPC error framing [Milestone 1 - F13]
 - ✓ **RUST-01**: High-performance standalone Rust binary with bundled SQLite + FTS5 [Milestone 2]
+- ✓ **CONF-01**: Hierarchical unified configuration resolution (CLI -> ENV -> config -> OS cache) [Milestone 2 - F6]
+- ✓ **SYNC-01**: Hash-verified incremental refresh (`size, mtime_ns, SHA-256`) [Milestone 2 - F7]
+- ✓ **SHIM-01**: Cross-agent native binary delegation shims with transparent Python fallback [Milestone 2]
 
 ### Active
-- [ ] **CONF-01**: Hierarchical unified configuration resolution (CLI -> ENV -> config -> OS cache) [Milestone 2 - F6]
-- [ ] **SYNC-01**: Hash-verified incremental refresh (`size, mtime_ns, SHA-256`) [Milestone 2 - F7]
 - [ ] **CI-01**: GitHub Actions matrix running Rust and Python test suites on Ubuntu and Windows [Milestone 2 - F16]
 - [ ] **ACE-01**: ACE counter split: decouple `seen` count from `helpful`/`harmful` feedback [Milestone 3 - F8]
 - [ ] **LOCK-01**: Atomic `O_EXCL` file locking with stale-lock expiration for concurrent ACE merges [Milestone 3 - F9]
