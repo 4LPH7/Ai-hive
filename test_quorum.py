@@ -126,6 +126,31 @@ class QuorumPromotionTest(QuorumSidecarTest):
         ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful"}])
         self.assertEqual(quorum.state_of(self.meta(), bid), "scout")
 
+class QuorumTrustBoundaryTest(QuorumSidecarTest):
+    """Evidence must come from identifiable sessions, and agent-written deltas cannot forge it."""
+
+    def test_anonymous_process_sessions_get_no_cross_session_credit(self):
+        with mock.patch.dict("os.environ", {"HIVE_SESSION_ID": "", "CLAUDE_CODE_SESSION_ID": ""}):
+            (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "anon lesson on locks"}])["added"]
+            for _ in range(3):  # each CLI call would get a fresh proc- id
+                ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful",
+                                    "session": f"proc-{_}-x"}])
+        rec = self.meta()[bid]
+        self.assertEqual((rec["state"], quorum.score(rec)), ("scout", 0.35))
+
+    def test_cli_delta_cannot_forge_session_or_evidence(self):
+        import json
+        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "forged lesson attempt"}])["added"]
+        delta = self.vault / "delta.json"
+        delta.write_text(json.dumps({"operations": [
+            {"type": "TAG", "id": bid, "tag": "helpful", "session": "fake-1", "evidence": "test_pass"},
+            {"type": "TAG", "id": bid, "tag": "helpful", "session": "fake-2", "evidence": "test_pass"}]}),
+            encoding="utf-8")
+        with mock.patch("sys.stdout"):
+            ace.main(["apply", "demo", str(delta)])
+        rec = self.meta()[bid]
+        self.assertEqual((rec["state"], quorum.score(rec), quorum.sessions(rec)), ("scout", 0.35, {"sess-a"}))
+
 
 if __name__ == "__main__":
     unittest.main()

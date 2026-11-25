@@ -17,6 +17,7 @@ pub const WEIGHTS: [(&str, f64); 3] = [("test_pass", 1.0), ("confirm", 1.0), ("s
 pub const PROMOTE_SCORE: f64 = 1.5;
 pub const PROMOTE_SESSIONS: usize = 2;
 pub const INJECT_QUORUM_ENV: &str = "HIVE_INJECT_QUORUM";
+pub const ANONYMOUS: &str = "anonymous";
 
 /// Never demotes; retired and canonical stay.
 pub fn promote(rec: &mut Meta) {
@@ -162,11 +163,21 @@ pub fn reconcile(
 /// bullet is `self_tag`, any other session `confirm`. A (session, kind) pair is recorded once.
 pub fn add_evidence(meta: &MetaMap, tags: &[Tag]) -> MetaMap {
     let mut out = meta.clone();
-    for t in tags.iter().filter(|t| !t.session.is_empty()) {
+    for t in tags {
         let rec = out
             .entry(t.id.clone())
             .or_insert_with(|| Meta::legacy(&t.id));
-        let kind = if t.hint == "test_pass" {
+        // anonymous per-process id: changes every CLI call, so it proves no independent session.
+        // All of it shares one bucket and earns self-tag weight at most.
+        let anonymous = crate::ledger::is_anonymous(&t.session);
+        let session = if anonymous {
+            ANONYMOUS.to_string()
+        } else {
+            t.session.clone()
+        };
+        let kind = if anonymous {
+            "self_tag"
+        } else if t.hint == "test_pass" {
             "test_pass"
         } else if t.session == rec.origin_session {
             "self_tag"
@@ -176,10 +187,10 @@ pub fn add_evidence(meta: &MetaMap, tags: &[Tag]) -> MetaMap {
         if !rec
             .evidence
             .iter()
-            .any(|e| e.session == t.session && e.kind == kind)
+            .any(|e| e.session == session && e.kind == kind)
         {
             rec.evidence.push(Evidence {
-                session: t.session.clone(),
+                session: session.clone(),
                 agent: t.agent.clone(),
                 kind: kind.into(),
             });
@@ -263,7 +274,19 @@ mod tests {
         let t = &d.tag.unwrap()[0];
         assert_eq!(
             (t.helpful, t.session.as_deref(), t.evidence.as_deref()),
-            (Some(2), Some("s9"), Some("test_pass"))
+            (Some(2), None, None),
+            "trusted-only fields are dropped from deltas"
+        );
+        let native = crate::ace::parse_delta(
+            r#"{"tag":[{"id":"x","helpful":1,"session":"fake","evidence":"test_pass"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(native.tag.unwrap()[0].session, None);
+        // anonymous proc- sessions share one bucket at self-tag weight
+        let anon = tag(&tag(&meta, "proc-1-a", "test_pass"), "proc-2-b", "");
+        assert_eq!(
+            (score(&anon["pit-00001"]), state_of(&anon, "pit-00001")),
+            (0.35, "scout")
         );
         // QUOR-03 promotion: 2 sessions at 2.0 -> canonical; 2 sessions at 1.35 -> quorum; 1 session never
         assert_eq!(state_of(&m, "pit-00001"), "canonical");

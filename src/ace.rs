@@ -396,11 +396,12 @@ pub struct TagOp {
     pub id: String,
     pub helpful: Option<i64>,
     pub harmful: Option<i64>,
-    /// QUOR-02: the session this tag speaks for (`ledger score` credits the scored session)
-    #[serde(default)]
+    /// QUOR-02: the session this tag speaks for (`ledger score` credits the scored session). Trusted-only:
+    /// never read from a delta, so an agent-written delta cannot forge sessions or test evidence.
+    #[serde(skip_deserializing)]
     pub session: Option<String>,
-    /// QUOR-02: evidence hint, `test_pass` from a passing scored session
-    #[serde(default)]
+    /// QUOR-02: evidence hint, `test_pass` from a passing scored session. Trusted-only, like `session`.
+    #[serde(skip_deserializing)]
     pub evidence: Option<String>,
 }
 
@@ -453,14 +454,13 @@ pub fn parse_delta(json_str: &str) -> Result<DeltaOps, String> {
                     "" => (num("helpful"), num("harmful")), // Python form {id, helpful: n}
                     _ => (None, None),                      // neutral
                 };
-                let opt = |k: &str| Some(field(k)).filter(|s| !s.is_empty());
                 if helpful.is_some() || harmful.is_some() {
                     tags.push(TagOp {
                         id: field("id"),
                         helpful,
                         harmful,
-                        session: opt("session"),
-                        evidence: opt("evidence"),
+                        session: None, // trusted-only fields are dropped at this boundary
+                        evidence: None,
                     });
                 }
             }

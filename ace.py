@@ -528,7 +528,9 @@ def main(argv):
             print(f"ace apply: invalid JSON ({exc}); nothing changed", file=sys.stderr)
             return 1
         ops = payload.get("operations", []) + payload.get("bullet_tags", []) if isinstance(payload, dict) else payload
-        ops = [dict(o, type=o.get("type", "TAG")) for o in ops if isinstance(o, dict)]
+        # agent-written deltas cannot name a session or claim test evidence (QUOR-02 trust boundary)
+        ops = [{k: v for k, v in dict(o, type=o.get("type", "TAG")).items() if k not in quorum.TRUSTED_ONLY_FIELDS}
+               for o in ops if isinstance(o, dict)]
         report = apply(rest[0], ops)
         print(json.dumps(report, indent=1))
         return 0

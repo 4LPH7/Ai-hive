@@ -20,6 +20,8 @@ WEIGHTS = {"test_pass": 1.0, "confirm": 1.0, "self_tag": 0.35}
 PROMOTE_SCORE = 1.5
 PROMOTE_SESSIONS = 2
 INJECT_QUORUM_ENV = "HIVE_INJECT_QUORUM"
+ANONYMOUS = "anonymous"
+TRUSTED_ONLY_FIELDS = ("session", "evidence")  # set only by `ledger score`, stripped from CLI deltas
 
 
 def _clean(rec):
@@ -89,10 +91,13 @@ def add_evidence(meta, tags):
     A (session, kind) pair is recorded once."""
     out = {i: _clean(r) for i, r in meta.items()}
     for bullet_id, session, agent, hint in tags:
-        if not session:
-            continue
         rec = _clean(_entry(out, bullet_id))
-        kind = "test_pass" if hint == "test_pass" else "self_tag" if session == rec["origin_session"] else "confirm"
+        if not session or str(session).startswith("proc-"):
+            # anonymous per-process id: it changes every CLI call, so it proves no independent session.
+            # All of it shares one bucket and earns self-tag weight at most.
+            session, kind = ANONYMOUS, "self_tag"
+        else:
+            kind = "test_pass" if hint == "test_pass" else "self_tag" if session == rec["origin_session"] else "confirm"
         if not any(e["session"] == session and e["kind"] == kind for e in rec["evidence"]):
             rec["evidence"].append({"session": session, "agent": agent, "kind": kind})
         out[bullet_id] = promote(rec)
