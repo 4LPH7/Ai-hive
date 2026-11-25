@@ -346,7 +346,15 @@ def apply(scope, ops, today=None):
         current = load(scope)
         new_sections, report = apply_ops(current, ops, today=today)
         save(scope, new_sections, today=today)
-        return report
+    try:  # PROV-02/04: who merged which bullets, at which commit; fail-open
+        import hashlib
+        import ledger
+        ledger.record_ace_apply(hive.load_config()["ledger"], scope, report.get("added", []),
+                                content_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                                repo_sha=ledger.repo_head(os.getcwd()))
+    except Exception as exc:
+        print(f"ace: provenance record skipped: {exc}", file=sys.stderr)
+    return report
 
 
 def select(scopes, task="", limit=INJECT_LIMIT):
@@ -371,9 +379,18 @@ def format_bullets(rows):
 
 def read_hook_input():
     try:
-        return json.loads(sys.stdin.read() or "{}")
+        data = json.loads(sys.stdin.read() or "{}")
     except json.JSONDecodeError:
         return {}
+    if isinstance(data, dict):  # PROV-01: hooks carry the client's own session id and transcript path
+        try:
+            import ledger
+            ledger.set_context(agent=ledger.agent_from_hint(data.get("transcript_path", "")),
+                               session_id=data.get("session_id"))
+        except Exception:
+            pass
+        return data
+    return {}
 
 
 def hook_start(scope=None):
@@ -481,9 +498,9 @@ def main(argv):
 
 if __name__ == "__main__":
     native = hive.find_native_binary()
-    if native and len(sys.argv) > 1 and sys.argv[1] in ("apply", "show", "hook-start", "hook-stop"):
+    # Hooks stay in Python: the Rust `ace hook-*` commands ignore the hook's stdin JSON (no cwd scope, no
+    # session id, no Stop-checkpoint decision), so delegating them silently disabled the ACE checkpoint.
+    if native and len(sys.argv) > 1 and sys.argv[1] in ("apply", "show"):
         import subprocess
-        cmd = sys.argv[1]
-        rust_cmd = "hook-start" if cmd == "hook-start" else "hook-stop" if cmd == "hook-stop" else cmd
-        sys.exit(subprocess.call([native, "ace", rust_cmd, *sys.argv[2:]]))
+        sys.exit(subprocess.call([native, "ace", *sys.argv[1:]]))
     sys.exit(main(sys.argv[1:]))

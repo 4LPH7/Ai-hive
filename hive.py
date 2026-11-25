@@ -1040,6 +1040,13 @@ def handle(msg):
     """One JSON-RPC message in, one response dict out (None for notifications).
     Dual-era: legacy `initialize` sessions and modern per-request `_meta` versions."""
     mid, method, params = msg.get("id"), msg.get("method", ""), msg.get("params") or {}
+    client = (params.get("clientInfo") or (params.get("_meta") or {}).get("io.modelcontextprotocol/clientInfo") or {})
+    if isinstance(client, dict) and client.get("name"):  # PROV-01: the client names itself
+        try:
+            import ledger
+            ledger.set_context(agent=ledger.agent_from_hint(client["name"]))
+        except Exception:
+            pass
     if mid is None:
         return None
     version = (params.get("_meta") or {}).get(META_VERSION)
@@ -1167,6 +1174,8 @@ def tool_ledger(*args, tail=None, project=None):
 
     t = int(tail) if tail is not None else None
     p = project
+    want_coverage = "--coverage" in args
+    args = tuple(a for a in args if a != "--coverage")
     if args:
         i = 0
         while i < len(args):
@@ -1181,6 +1190,11 @@ def tool_ledger(*args, tail=None, project=None):
                     t = int(args[i])
                 i += 1
     entries = ledger.read_ledger(cfg["ledger"], tail=t, project=p)
+    if want_coverage:
+        c = ledger.coverage(entries)
+        pct = (lambda n: n * 100.0 / c["total"]) if c["total"] else (lambda n: 0.0)
+        return (f"ledger coverage: {c['total']} events | session_id {pct(c['with_session']):.1f}% "
+                f"({c['fallback_session']} process-scoped) | agent {pct(c['with_agent']):.1f}%")
     if not entries:
         return f"ledger: no entries in {cfg['ledger']}"
     lines = []

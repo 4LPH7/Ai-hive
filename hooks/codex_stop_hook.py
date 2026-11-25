@@ -39,6 +39,13 @@ def run_codex_stop(dry_run=False):
         import ledger
 
         cfg = hive.load_config()
+        if not sys.stdin.isatty():  # PROV-01: Codex hook input carries its session id
+            try:
+                data = json.loads(sys.stdin.read() or "{}")
+                if isinstance(data, dict):
+                    ledger.set_context(agent="codex", session_id=data.get("session_id"))
+            except (OSError, ValueError):
+                pass
         changed_files = get_git_status()
         if not changed_files and not dry_run:
             # No meaningful file edits to reflect on
