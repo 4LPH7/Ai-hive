@@ -52,16 +52,29 @@ pub fn save(path: &Path, meta: &MetaMap) -> Result<(), String> {
 }
 
 pub fn state_of<'a>(meta: &'a MetaMap, id: &str) -> &'a str {
-    meta.get(id).map(|m| m.state.as_str()).unwrap_or(DEFAULT_STATE)
+    meta.get(id)
+        .map(|m| m.state.as_str())
+        .unwrap_or(DEFAULT_STATE)
 }
 
 /// Added ids become scouts with origin; pruned ids become retired; others untouched.
-pub fn reconcile(meta: &MetaMap, added: &[String], pruned: &[String], session: &str, agent: &str) -> MetaMap {
+pub fn reconcile(
+    meta: &MetaMap,
+    added: &[String],
+    pruned: &[String],
+    session: &str,
+    agent: &str,
+) -> MetaMap {
     let mut out = meta.clone();
     for id in added {
         out.insert(
             id.clone(),
-            Meta { id: id.clone(), state: "scout".into(), origin_session: session.into(), origin_agent: agent.into() },
+            Meta {
+                id: id.clone(),
+                state: "scout".into(),
+                origin_session: session.into(),
+                origin_agent: agent.into(),
+            },
         );
     }
     for id in pruned {
@@ -83,7 +96,12 @@ mod tests {
 
     #[test]
     fn test_serialization_matches_python_mirror() {
-        let m = Meta { id: "pit-00001".into(), state: "scout".into(), origin_session: "s".into(), origin_agent: "a".into() };
+        let m = Meta {
+            id: "pit-00001".into(),
+            state: "scout".into(),
+            origin_session: "s".into(),
+            origin_agent: "a".into(),
+        };
         assert_eq!(
             serde_json::to_string(&m).unwrap(),
             r#"{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a"}"#
@@ -94,17 +112,25 @@ mod tests {
     fn test_apply_with_lock_records_scout_then_retired_without_id_reuse() {
         let vault = std::env::temp_dir().join(format!("hive-quorum-apply-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&vault);
-        let add = |c: &str| crate::ace::parse_delta(&format!(r#"{{"add":[{{"section":"pitfalls","content":"{c}"}}]}}"#)).unwrap();
-        crate::ace::apply_with_lock(&vault, "demo", &add("first scout lesson about tokenizer")).unwrap();
+        let add = |c: &str| {
+            crate::ace::parse_delta(&format!(
+                r#"{{"add":[{{"section":"pitfalls","content":"{c}"}}]}}"#
+            ))
+            .unwrap()
+        };
+        crate::ace::apply_with_lock(&vault, "demo", &add("first scout lesson about tokenizer"))
+            .unwrap();
         let mf = meta_path(&crate::ace::scope_path(&vault, "demo").unwrap());
         let m = load(&mf);
         let (id, rec) = m.iter().next().unwrap();
         assert_eq!(rec.state, "scout");
         let id = id.clone();
-        let tag = crate::ace::parse_delta(&format!(r#"{{"tag":[{{"id":"{id}","harmful":9}}]}}"#)).unwrap();
+        let tag = crate::ace::parse_delta(&format!(r#"{{"tag":[{{"id":"{id}","harmful":9}}]}}"#))
+            .unwrap();
         crate::ace::apply_with_lock(&vault, "demo", &tag).unwrap();
         assert_eq!(state_of(&load(&mf), &id), "retired");
-        crate::ace::apply_with_lock(&vault, "demo", &add("another unrelated graph cache rule")).unwrap();
+        crate::ace::apply_with_lock(&vault, "demo", &add("another unrelated graph cache rule"))
+            .unwrap();
         let m = load(&mf);
         assert_eq!(m.len(), 2, "second ADD got a fresh id: {m:?}");
         let _ = std::fs::remove_dir_all(&vault);
@@ -119,9 +145,21 @@ mod tests {
         let m = load(&p);
         assert_eq!(m.keys().collect::<Vec<_>>(), vec!["pit-00003"]);
         assert_eq!(state_of(&m, "pit-00009"), "canonical");
-        let r = reconcile(&m, &["pit-00004".into()], &["pit-00003".into()], "s1", "claude");
-        assert_eq!((state_of(&r, "pit-00004"), state_of(&r, "pit-00003")), ("scout", "retired"));
-        assert_eq!(meta_path(Path::new("x/playbook.md")), Path::new("x/playbook.meta.jsonl"));
+        let r = reconcile(
+            &m,
+            &["pit-00004".into()],
+            &["pit-00003".into()],
+            "s1",
+            "claude",
+        );
+        assert_eq!(
+            (state_of(&r, "pit-00004"), state_of(&r, "pit-00003")),
+            ("scout", "retired")
+        );
+        assert_eq!(
+            meta_path(Path::new("x/playbook.md")),
+            Path::new("x/playbook.meta.jsonl")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
