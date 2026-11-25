@@ -20,6 +20,16 @@ class TestLlmCurate(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_toml_llm_combos_reach_the_llm_config(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_file = Path(tmp) / "config.toml"
+            cfg_file.write_text('[llm.combos]\nprivate = "free"\ndeep = "free"\n', encoding="utf-8")
+            cfg = llm.load_llm_config(cli_config=str(cfg_file))
+        self.assertEqual((cfg["combos"]["private"], cfg["combos"]["deep"], cfg["combos"]["fast"]),
+                         ("free", "free", "hive-fast"))
+
     def test_privacy_hard_lock_never_leaves_private(self):
         cfg = {
             "enabled": True,

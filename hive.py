@@ -137,6 +137,7 @@ def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_ledger=None,
             ledger = str(Path(base) / "hive" / "ledger.jsonl")
 
     return {
+        **config_data,  # keep llm.* and projects.* keys: llm.load_llm_config reads them from here
         "vault": Path(vault),
         "projects": Path(projects),
         "db": Path(db),
