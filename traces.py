@@ -67,8 +67,10 @@ def add(db, project, kind, target, summary, agent, session_id, now):
 def active(db, project, now):
     """[(trace dict, strength)] above MIN_STRENGTH, strongest first, after purging rows older than 7 days."""
     ensure_table(db)
-    with db:
-        db.execute("DELETE FROM traces WHERE created_at < ?", (now - PURGE_AFTER_SECS,))
+    cutoff = now - PURGE_AFTER_SECS
+    if db.execute("SELECT 1 FROM traces WHERE created_at < ? LIMIT 1", (cutoff,)).fetchone():
+        with db:  # write + fsync only when something is stale: reads stay read-only (Phase 7 gate < 10 ms)
+            db.execute("DELETE FROM traces WHERE created_at < ?", (cutoff,))
     cols = ("id", "project", "kind", "target", "summary", "agent", "session_id", "w0", "created_at", "half_life_h")
     rows = db.execute(f"SELECT {', '.join(cols)} FROM traces WHERE project=?", (project,)).fetchall()
     out = []

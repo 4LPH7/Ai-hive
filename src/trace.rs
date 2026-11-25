@@ -105,11 +105,15 @@ pub fn add(
 /// Traces still above `MIN_STRENGTH`, strongest first, after purging anything older than 7 days.
 pub fn active(conn: &Connection, project: &str, now: i64) -> Result<Vec<(Trace, f64)>, String> {
     ensure_table(conn)?;
-    conn.execute(
-        "DELETE FROM traces WHERE created_at < ?1",
-        params![now - PURGE_AFTER_SECS],
-    )
-    .map_err(|e| e.to_string())?;
+    let cutoff = now - PURGE_AFTER_SECS;
+    let stale: bool = conn
+        .query_row("SELECT EXISTS(SELECT 1 FROM traces WHERE created_at < ?1)", params![cutoff], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if stale {
+        // write + fsync only when something is stale: reads stay read-only (Phase 7 gate < 10 ms)
+        conn.execute("DELETE FROM traces WHERE created_at < ?1", params![cutoff])
+            .map_err(|e| e.to_string())?;
+    }
     let mut stmt = conn
         .prepare(
             "SELECT id, project, kind, target, summary, agent, session_id, w0, created_at, half_life_h
