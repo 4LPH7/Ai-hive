@@ -428,7 +428,13 @@ pub fn validate_verdicts(
         .flatten()
     {
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let (a, b, winner) = (s("bullet_a"), s("bullet_b"), s("winner"));
+        // ids as the model may echo them: "[pit-00012]" or "`pit-00012`" -> "pit-00012"
+        let id = |k: &str| {
+            s(k).trim()
+                .trim_matches(|c| "[]`'\" ".contains(c))
+                .to_string()
+        };
+        let (a, b, winner) = (id("bullet_a"), id("bullet_b"), id("winner"));
         let reason = s("reason").split_whitespace().collect::<Vec<_>>().join(" ");
         let cites: Vec<String> = v
             .get("citations")
@@ -617,7 +623,7 @@ mod conflict_tests {
         let pb = "## pitfalls\n- [pit-00001] seen=3 helpful=3 harmful=0 :: cargo build --release fails with Access is denied on target/release/hive.exe; use cargo check until sessions close.\n## commands\n- [cmd-00002] seen=1 helpful=1 harmful=0 :: rebuild anyway: rename target/release/hive.exe, then cargo build --release\n";
         fs::write(vault.join("_meta").join("playbook.md"), pb).unwrap();
         let reply = r#"{"verdicts":[
-            {"bullet_a":"pit-00001","bullet_b":"cmd-00002","winner":"cmd-00002","reason":"Renaming a locked exe works.","citations":["target/release/hive.exe"]},
+            {"bullet_a":"[pit-00001]","bullet_b":"`cmd-00002`","winner":"[cmd-00002]","reason":"Renaming a locked exe works.","citations":["target/release/hive.exe"]},
             {"bullet_a":"pit-00001","bullet_b":"cmd-00002","winner":"str-00003","reason":"x","citations":["--release"]},
             {"bullet_a":"pit-00001","bullet_b":"cmd-00002","winner":"both","reason":"y","citations":["src/invented.rs"]}]}"#;
         let fake =

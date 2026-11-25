@@ -1372,6 +1372,9 @@ def tool_curate(*args):
         if res["skipped"]:
             return f"curate --conflicts: {res['model']} ({res['reason']})"
         out = f"curate --conflicts: model={res['model']} conflicts={res['conflicts']} verdicts={res['verdicts']}"
+        out += "".join(f"\n  rejected: {r}" for r in res.get("rejected", []))
+        if res.get("reason"):
+            out += f"\n  {res['reason']}"
         return out + (f"\n  proposal written to: {res['proposal_file']}" if res["proposal_file"] else "")
     res = curate.run_curate(
         ledger_path=cfg["ledger"],

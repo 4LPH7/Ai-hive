@@ -296,22 +296,41 @@ def git_diff(projects_root, scope, paths):
         return ""
 
 
-def validate_verdicts(payload, pairs, corpus):
+def _bid(value):
+    """Bullet id as the model may echo it: '[pit-00012]' or '`pit-00012`' -> 'pit-00012'."""
+    return str(value or "").strip().strip("[]`'\" ").strip()
+
+
+def _reject_reason(v, known, corpus):
+    """'' when the verdict passes the gate, else a short reason code."""
+    if not isinstance(v, dict):
+        return "not-an-object"
+    a, b, winner = _bid(v.get("bullet_a")), _bid(v.get("bullet_b")), _bid(v.get("winner"))
+    reason = " ".join(str(v.get("reason", "")).split())
+    cites = [c for c in v.get("citations", []) if isinstance(c, str)] if isinstance(v.get("citations"), list) else []
+    missing = [c for c in cites if not c or c.lower() not in corpus]
+    checks = ((frozenset((a, b)) not in known, f"unknown-pair {a} {b}"),
+              (winner not in (a, b, "both"), f"bad-winner {winner}"),
+              (not reason, "empty-reason"), (len(reason) > MAX_REASON_CHARS, "long-reason"),
+              (bool(ace.SECRET_RE.search(reason)), "secret-in-reason"), (not cites, "no-citation"),
+              (bool(missing), f"uncited {missing[:2]}"))
+    return next((code for failed, code in checks if failed), "")
+
+
+def validate_verdicts(payload, pairs, corpus, rejected=None):
     """Deterministic gate: known pair, winner in the pair or 'both', a short secret-free reason, and >= 1
-    citation, every one of which appears in the anchors or diff the model was shown."""
+    citation, every one of which appears in the anchors or diff the model was shown. Reasons for dropped
+    verdicts go to `rejected` when a list is passed."""
     known = {frozenset((a, b)) for a, b, _ in pairs}
     out = []
     for v in payload.get("verdicts", []) if isinstance(payload, dict) else []:
-        if not isinstance(v, dict):
+        why = _reject_reason(v, known, corpus)
+        if why:
+            if rejected is not None:
+                rejected.append(why)
             continue
-        a, b, winner = str(v.get("bullet_a", "")), str(v.get("bullet_b", "")), str(v.get("winner", ""))
-        reason = " ".join(str(v.get("reason", "")).split())
-        cites = [str(c) for c in v.get("citations", []) if isinstance(c, str)] if isinstance(v.get("citations"), list) else []
-        if (frozenset((a, b)) not in known or winner not in (a, b, "both") or not reason
-                or len(reason) > MAX_REASON_CHARS or ace.SECRET_RE.search(reason)
-                or not cites or not all(c and c.lower() in corpus for c in cites)):
-            continue
-        out.append({"bullet_a": a, "bullet_b": b, "winner": winner, "reason": reason, "citations": cites})
+        out.append({"bullet_a": _bid(v["bullet_a"]), "bullet_b": _bid(v["bullet_b"]), "winner": _bid(v["winner"]),
+                    "reason": " ".join(str(v["reason"]).split()), "citations": list(v["citations"])})
         if len(out) >= MAX_VERDICTS:
             break
     return out
@@ -358,10 +377,12 @@ def run_curate_conflicts(vault_path, project=None, dry_run=False, config_path=No
     except Exception as exc:  # fail-open: the judge is optional
         return dict(result, reason=f"OmniRoute call failed (fail-open): {exc}")
     corpus = (" ".join(anchors) + "\n" + history).lower()
-    verdicts = validate_verdicts(payload, pairs, corpus)
-    result.update(skipped=False, verdicts=len(verdicts))
+    rejected = []
+    verdicts = validate_verdicts(payload, pairs, corpus, rejected)
+    result.update(skipped=False, verdicts=len(verdicts), rejected=rejected)
     if not verdicts:
-        return dict(result, reason="no verdict passed deterministic validation")
+        got = len(payload.get("verdicts", [])) if isinstance(payload, dict) and isinstance(payload.get("verdicts"), list) else 0
+        return dict(result, reason=f"no verdict passed deterministic validation ({got} returned)")
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     body = [f"# Conflict verdicts: {scope} ({today})", "",
             f"> Proposed by `{model}` via `hive curate --conflicts` (QUOR-05). Nothing was applied: review, then",

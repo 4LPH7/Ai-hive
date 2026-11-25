@@ -67,6 +67,11 @@ class CurateConflictsTest(unittest.TestCase):
                   if f.severity == "ERROR"]
         self.assertEqual(errors, [])
 
+    def test_ids_echoed_with_brackets_or_backticks_are_accepted(self):
+        res = self.run_judge([verdict(bullet_a="[pit-00001]", bullet_b="`cmd-00002`", winner="[cmd-00002]")])
+        self.assertEqual(res["verdicts"], 1)
+        self.assertIn("`pit-00001` vs `cmd-00002`: winner `cmd-00002`", self.inbox()[0].read_text(encoding="utf-8"))
+
     def test_gate_rejects_unknown_pairs_bad_winners_uncited_and_secret_reasons(self):
         bad = [verdict(bullet_a="pit-00009"), verdict(winner="str-00003"), verdict(citations=[]),
                verdict(citations=["src/invented.rs"]), verdict(reason=""),
