@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub const ALLOWED_TYPE: &[&str] = &["project-memory", "adr", "journal", "note"];
+pub const ALLOWED_TYPE: &[&str] = &["project-memory", "adr", "journal", "note", "codex"];
 pub const ALLOWED_STATUS: &[&str] = &["active", "superseded", "archived"];
 pub const ALLOWED_AGENT: &[&str] = &["claude", "codex", "antigravity", "user"];
 pub const REQUIRED_FIELDS: &[&str] = &["type", "project", "agent", "status", "updated"];

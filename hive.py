@@ -1158,6 +1158,31 @@ def tool_eval(golden=str(Path(__file__).with_name("eval_golden.json")), k=5):
     return "\n".join([f"Recall@{k} {found}/{n} = {found / n:.2f}   MRR {rr / n:.3f}"] + misses)
 
 
+def tool_codex(*args):
+    """CODEX-02 CLI fallback: `codex write <project> <record.json>` -> immutable codices/<project>/ note."""
+    import datetime
+    import sqlite3
+    import ledger
+    import codex
+    if len(args) != 3 or args[0] != "write":
+        raise SystemExit("usage: hive codex write <project> <record.json>")
+    try:
+        rec = json.loads(Path(args[2]).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"codex: cannot read record: {exc}")
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    try:
+        with db:
+            path = codex.write(VAULT, db, args[1], rec, ledger.resolve_agent(), ledger.resolve_session(),
+                               datetime.date.today().isoformat(), int(time.time()))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    finally:
+        db.close()
+    return f"codex: wrote {path} ({len(rec['dead_ends'])} dead-end traces)"
+
+
 def tool_trace(*args):
     """TRACE-03 CLI fallback: `trace add <project> <kind> <target> <summary>` | `trace list <project>`.
     Writes only the disposable hive.sqlite, never the vault."""
@@ -1374,7 +1399,7 @@ def main(argv=None):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace,
+        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex,
     }
     if cmd not in commands:
         print(__doc__)

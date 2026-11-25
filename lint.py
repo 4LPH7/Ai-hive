@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # `python -I` drops th
 import hive  # noqa: E402
 
 ALLOWED = {
-    "type": {"project-memory", "adr", "journal", "note"},
+    "type": {"project-memory", "adr", "journal", "note", "codex"},
     "status": {"active", "superseded", "archived"},
     "agent": {"claude", "codex", "antigravity", "user"},
 }

@@ -1,5 +1,6 @@
 pub mod ace;
 pub mod bench;
+pub mod codex;
 pub mod common;
 pub mod curate;
 pub mod eval;
