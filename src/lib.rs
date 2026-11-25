@@ -4,6 +4,7 @@ pub mod codex;
 pub mod common;
 pub mod curate;
 pub mod eval;
+pub mod governance;
 pub mod graph;
 pub mod index;
 pub mod ledger;

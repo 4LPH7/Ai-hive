@@ -128,6 +128,24 @@ enum Commands {
         #[command(subcommand)]
         cmd: TraceCommands,
     },
+    /// GOV-01: reversible quarantine of everything from a session or agent (rules only; items never edited)
+    Quarantine {
+        #[arg(long, default_value = "")]
+        session: String,
+        #[arg(long, default_value = "")]
+        agent: String,
+        /// YYYY-MM-DD, ISO datetime or epoch seconds
+        #[arg(long, default_value = "")]
+        since: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+        /// Remove the rule with this id
+        #[arg(long)]
+        release: Option<String>,
+        /// Show active rules
+        #[arg(long)]
+        list: bool,
+    },
     /// Session codices: immutable vault notes from hive-ace checkpoint records
     Codex {
         #[command(subcommand)]
@@ -500,6 +518,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         }
                     }
+                }
+            }
+            Commands::Quarantine {
+                session,
+                agent,
+                since,
+                reason,
+                release,
+                list,
+            } => {
+                use ai_hive::governance as gov;
+                if list {
+                    let rules = gov::load_rules(&cfg.vault);
+                    if rules.is_empty() {
+                        println!("quarantine: no active rules");
+                    }
+                    for r in rules {
+                        let star = |s: &str| {
+                            if s.is_empty() {
+                                "*".to_string()
+                            } else {
+                                s.to_string()
+                            }
+                        };
+                        println!(
+                            "{} session={} agent={} since={} {}",
+                            r.id,
+                            star(&r.session),
+                            star(&r.agent),
+                            r.since,
+                            r.reason
+                        );
+                    }
+                } else if let Some(id) = release {
+                    if gov::release(&cfg.vault, &id)? > 0 {
+                        println!("quarantine: released {id}");
+                    } else {
+                        println!("quarantine: no rule {id}");
+                    }
+                } else {
+                    if let Some(parent) = cfg.db.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    let conn = rusqlite::Connection::open(&cfg.db)?;
+                    let (rule, counts) = gov::quarantine(
+                        &cfg.vault,
+                        &conn,
+                        &session,
+                        &agent,
+                        &since,
+                        &reason,
+                        chrono::Utc::now().timestamp(),
+                    )?;
+                    let parts: Vec<String> = gov::KINDS
+                        .iter()
+                        .map(|k| format!("{k}={}", counts[k]))
+                        .collect();
+                    println!("quarantine: {} {}", rule.id, parts.join(" "));
                 }
             }
             Commands::Codex {

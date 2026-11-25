@@ -66,6 +66,9 @@ pub struct Meta {
     pub origin_session: String,
     #[serde(default)]
     pub origin_agent: String,
+    /// GOV-01: when the bullet was proposed (0 = unknown / legacy), so --agent --since rules can match it
+    #[serde(default)]
+    pub origin_ts: i64,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
 }
@@ -77,6 +80,7 @@ impl Meta {
             state: DEFAULT_STATE.into(),
             origin_session: String::new(),
             origin_agent: String::new(),
+            origin_ts: 0,
             evidence: Vec::new(),
         }
     }
@@ -138,6 +142,7 @@ pub fn reconcile(
     pruned: &[String],
     session: &str,
     agent: &str,
+    now: i64,
 ) -> MetaMap {
     let mut out = meta.clone();
     for id in added {
@@ -148,6 +153,7 @@ pub fn reconcile(
                 state: "scout".into(),
                 origin_session: session.into(),
                 origin_agent: agent.into(),
+                origin_ts: now,
                 evidence: Vec::new(),
             },
         );
@@ -406,11 +412,12 @@ mod tests {
             state: "scout".into(),
             origin_session: "s".into(),
             origin_agent: "a".into(),
+            origin_ts: 0,
             evidence: Vec::new(),
         };
         assert_eq!(
             serde_json::to_string(&m).unwrap(),
-            r#"{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a","evidence":[]}"#
+            r#"{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a","origin_ts":0,"evidence":[]}"#
         );
         m.evidence.push(Evidence {
             session: "s2".into(),
@@ -424,7 +431,14 @@ mod tests {
 
     #[test]
     fn test_evidence_weights_and_same_session_repeat() {
-        let meta = reconcile(&MetaMap::new(), &["pit-00001".into()], &[], "sa", "claude");
+        let meta = reconcile(
+            &MetaMap::new(),
+            &["pit-00001".into()],
+            &[],
+            "sa",
+            "claude",
+            0,
+        );
         let tag = |m: &MetaMap, s: &str, hint: &str| {
             add_evidence(
                 m,
@@ -543,7 +557,14 @@ mod tests {
             "cmd-00002".to_string(),
             vec!["a".to_string(), "b".to_string()],
         )];
-        let meta = reconcile(&MetaMap::new(), &["cmd-00002".into()], &[], "sa", "claude");
+        let meta = reconcile(
+            &MetaMap::new(),
+            &["cmd-00002".into()],
+            &[],
+            "sa",
+            "claude",
+            0,
+        );
         let t = |s: &str, hint: &str| Tag {
             id: "cmd-00002".into(),
             session: s.into(),
@@ -595,6 +616,7 @@ mod tests {
             &["pit-00003".into()],
             "s1",
             "claude",
+            0,
         );
         assert_eq!(
             (state_of(&r, "pit-00004"), state_of(&r, "pit-00003")),

@@ -370,7 +370,7 @@ def apply(scope, ops, today=None):
         # QUOR-04: conflicts inside this playbook gate promotion and are reported; lines are never touched
         pairs = quorum.conflicts([b for bullets in new_sections.values() for b in bullets])
         if report["added"] or report["pruned"] or evidence:  # QUOR-01/02, PROV-04: sidecar, same lock
-            base = quorum.reconcile(meta, report["added"], report["pruned"], session, agent)
+            base = quorum.reconcile(meta, report["added"], report["pruned"], session, agent, int(time.time()))
             meta = quorum.displace(base, quorum.add_evidence(base, evidence, quorum.gates(base, pairs)), pairs)
             quorum.save(meta_file, meta)
         quorum.write_report(VAULT / "_meta" / "_conflicts.md", slugify(scope), pairs, meta,

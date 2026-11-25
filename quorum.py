@@ -27,6 +27,10 @@ TRUSTED_ONLY_FIELDS = ("session", "evidence")  # set only by `ledger score`, str
 
 def _clean(rec):
     out = {k: str(rec.get(k, "")) for k in FIELDS}
+    try:  # GOV-01: when the bullet was proposed (0 = unknown / legacy), so --agent --since rules can match it
+        out["origin_ts"] = int(rec.get("origin_ts") or 0)
+    except (TypeError, ValueError):
+        out["origin_ts"] = 0
     ev = rec.get("evidence") if isinstance(rec.get("evidence"), list) else []
     out["evidence"] = [{k: str(e.get(k, "")) for k in EVIDENCE_FIELDS} for e in ev
                        if isinstance(e, dict) and e.get("kind") in WEIGHTS and e.get("session")]
@@ -71,11 +75,12 @@ def state_of(meta, bullet_id):
     return meta.get(bullet_id, {}).get("state", DEFAULT_STATE)
 
 
-def reconcile(meta, added, pruned, session, agent):
+def reconcile(meta, added, pruned, session, agent, now=0):
     """New meta: added ids become scouts with origin; pruned ids become retired; others untouched."""
     out = {i: dict(r) for i, r in meta.items()}
     for i in added:
-        out[i] = {"id": i, "state": "scout", "origin_session": session, "origin_agent": agent, "evidence": []}
+        out[i] = {"id": i, "state": "scout", "origin_session": session, "origin_agent": agent,
+                  "origin_ts": int(now), "evidence": []}
     for i in pruned:
         out[i] = dict(_entry(out, i), state="retired")
     return out

@@ -694,7 +694,8 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
     if !added.is_empty() || !pruned.is_empty() || !evidence.is_empty() {
         added.sort();
         pruned.sort();
-        let base = crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent);
+        let now = chrono::Utc::now().timestamp();
+        let base = crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent, now);
         let gates = crate::quorum::gates(&base, &pairs);
         meta = crate::quorum::displace(
             &base,

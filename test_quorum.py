@@ -48,7 +48,7 @@ class QuorumSidecarTest(unittest.TestCase):
 
     def test_line_serialization_is_compact_and_ordered(self):
         self.assertEqual(quorum.dumps({"origin_agent": "a", "state": "scout", "id": "pit-00001", "origin_session": "s"}),
-                         '{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a","evidence":[]}')
+                         '{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a","origin_ts":0,"evidence":[]}')
         rec = {"id": "x", "state": "scout", "evidence": [{"kind": "confirm", "agent": "codex", "session": "s2"}]}
         self.assertIn('"evidence":[{"session":"s2","agent":"codex","kind":"confirm"}]', quorum.dumps(rec))
 
