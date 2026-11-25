@@ -87,6 +87,45 @@ class QuorumEvidenceTest(QuorumSidecarTest):
         rec = self.meta()["pit-00001"]
         self.assertEqual((rec["state"], quorum.score(rec)), ("canonical", 1.0))
 
+class QuorumPromotionTest(QuorumSidecarTest):
+    """QUOR-03: promote at score >= 1.5 from >= 2 sessions; inject only canonical (quorum behind a flag)."""
+
+    def ids_injected(self):
+        return {b["id"] for _, _, b in ace.select(["demo"], "")}
+
+    def test_scout_hidden_until_quorum_then_canonical(self):
+        path = ace.scope_path("demo")
+        path.parent.mkdir(parents=True)
+        path.write_text("## pitfalls\n- [pit-00001] seen=2 helpful=2 harmful=0 :: legacy lesson here\n", encoding="utf-8")
+        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "scout lesson on cache keys"}])["added"]
+        self.assertEqual(self.ids_injected(), {"pit-00001"}, "scouts are never injected")
+        ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful", "evidence": "test_pass"}])  # 1.0, 1 session
+        self.assertEqual(quorum.state_of(self.meta(), bid), "scout")
+        # another session independently proposes the same lesson: near-duplicate ADD counts as confirm
+        with mock.patch.dict("os.environ", {"HIVE_SESSION_ID": "sess-b"}):
+            r = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "scout lesson on cache keys again"}])
+        self.assertEqual(r["reinforced"], [bid])
+        self.assertEqual(quorum.state_of(self.meta(), bid), "canonical")  # 1.0 + 1.0 from 2 sessions
+        self.assertIn(bid, self.ids_injected())
+
+    def test_two_sessions_below_threshold_is_quorum_behind_flag(self):
+        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "scout lesson on graph cache"}])["added"]
+        ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful"}])                     # sess-a self 0.35
+        ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful", "session": "sess-c",
+                            "evidence": "bogus"}])                                            # sess-c confirm 1.0
+        rec = self.meta()[bid]
+        self.assertAlmostEqual(quorum.score(rec), 1.35)
+        self.assertEqual(rec["state"], "quorum")
+        self.assertNotIn(bid, self.ids_injected())
+        with mock.patch.dict("os.environ", {"HIVE_INJECT_QUORUM": "1"}):
+            self.assertIn(bid, self.ids_injected())
+
+    def test_single_session_never_promotes(self):
+        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "one session hallucinated rule"}])["added"]
+        ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful", "evidence": "test_pass"}])
+        ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful"}])
+        self.assertEqual(quorum.state_of(self.meta(), bid), "scout")
+
 
 if __name__ == "__main__":
     unittest.main()

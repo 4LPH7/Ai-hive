@@ -365,6 +365,8 @@ def apply(scope, ops, today=None):
         session, agent = ledger.resolve_session(), ledger.resolve_agent()
         live = {b["id"] for bullets in new_sections.values() for b in bullets}
         evidence = helpful_tags(ops, live, session, agent)
+        # QUOR-03: another session independently proposing the same lesson is a confirmation
+        evidence += [(i, session, agent, "") for i in report["reinforced"] if i in live]
         if report["added"] or report["pruned"] or evidence:  # QUOR-01/02, PROV-04: sidecar, same lock
             meta = quorum.reconcile(meta, report["added"], report["pruned"], session, agent)
             quorum.save(meta_file, quorum.add_evidence(meta, evidence))
@@ -384,8 +386,11 @@ def select(scopes, task="", limit=INJECT_LIMIT):
     want = tokens(task)
     pool = []
     for scope in scopes:
+        meta = quorum.load(quorum.meta_path(scope_path(scope)))  # QUOR-03: only injectable states
         for name, bullets in load(scope).items():
             for b in bullets:
+                if not quorum.injectable(quorum.state_of(meta, b["id"])):
+                    continue
                 overlap = len(want & tokens(b["content"])) if want else 0
                 pool.append(((net(b) + 1) * (1 + overlap), scope, name, b))
     pool.sort(key=lambda x: -x[0])

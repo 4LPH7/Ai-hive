@@ -13,6 +13,35 @@ pub const DEFAULT_STATE: &str = "canonical";
 /// QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0).
 pub const WEIGHTS: [(&str, f64); 3] = [("test_pass", 1.0), ("confirm", 1.0), ("self_tag", 0.35)];
 
+/// QUOR-03: canonical at score >= PROMOTE_SCORE from >= PROMOTE_SESSIONS sessions; >= 2 sessions below it = quorum.
+pub const PROMOTE_SCORE: f64 = 1.5;
+pub const PROMOTE_SESSIONS: usize = 2;
+pub const INJECT_QUORUM_ENV: &str = "HIVE_INJECT_QUORUM";
+
+/// Never demotes; retired and canonical stay.
+pub fn promote(rec: &mut Meta) {
+    if !matches!(rec.state.as_str(), "scout" | "quorum") || sessions(rec).len() < PROMOTE_SESSIONS {
+        return;
+    }
+    rec.state = if score(rec) >= PROMOTE_SCORE {
+        "canonical"
+    } else {
+        "quorum"
+    }
+    .into();
+}
+
+/// Only canonical bullets reach agents; quorum too when HIVE_INJECT_QUORUM=1. Scouts never, so the
+/// confirmations that promote them stay independent.
+pub fn injectable(state: &str) -> bool {
+    state == "canonical"
+        || (state == "quorum"
+            && matches!(
+                std::env::var(INJECT_QUORUM_ENV).as_deref(),
+                Ok("1") | Ok("true")
+            ))
+}
+
 fn weight(kind: &str) -> Option<f64> {
     WEIGHTS.iter().find(|(k, _)| *k == kind).map(|(_, w)| *w)
 }
@@ -155,6 +184,7 @@ pub fn add_evidence(meta: &MetaMap, tags: &[Tag]) -> MetaMap {
                 kind: kind.into(),
             });
         }
+        promote(rec);
     }
     out
 }
@@ -235,6 +265,16 @@ mod tests {
             (t.helpful, t.session.as_deref(), t.evidence.as_deref()),
             (Some(2), Some("s9"), Some("test_pass"))
         );
+        // QUOR-03 promotion: 2 sessions at 2.0 -> canonical; 2 sessions at 1.35 -> quorum; 1 session never
+        assert_eq!(state_of(&m, "pit-00001"), "canonical");
+        let q = tag(&tag(&meta, "sa", ""), "sc", "");
+        assert_eq!(
+            (score(&q["pit-00001"]), state_of(&q, "pit-00001")),
+            (1.35, "quorum")
+        );
+        let one = tag(&tag(&meta, "sa", "test_pass"), "sa", "");
+        assert_eq!(state_of(&one, "pit-00001"), "scout");
+        assert!(injectable("canonical") && !injectable("scout") && !injectable("retired"));
         let legacy = tag(&MetaMap::new(), "sa", "");
         assert_eq!(
             (state_of(&legacy, "pit-00001"), score(&legacy["pit-00001"])),

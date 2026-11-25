@@ -533,13 +533,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("ace: applied {} changes to {}", changed, scope);
                     }
                     AceCommands::Show { scope, task } => {
-                        let sections = load(&vault, &scope)?;
+                        let sections = ai_hive::ace::load_injectable(&vault, &scope)?;
                         let t = task.as_deref().unwrap_or("");
                         let bullets = select_bullets(&sections, t, 12);
                         println!("{}", format_bullets(&bullets));
                     }
                     AceCommands::HookStart { scope } => {
-                        let sections = load(&vault, &scope)?;
+                        let sections = ai_hive::ace::load_injectable(&vault, &scope)?;
                         let bullets = select_bullets(&sections, "", 8);
                         let bullet_ids: Vec<String> =
                             bullets.iter().map(|b| b.id.clone()).collect();

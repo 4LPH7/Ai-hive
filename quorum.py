@@ -16,6 +16,10 @@ FIELDS = ("id", "state", "origin_session", "origin_agent")
 EVIDENCE_FIELDS = ("session", "agent", "kind")
 # QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0)
 WEIGHTS = {"test_pass": 1.0, "confirm": 1.0, "self_tag": 0.35}
+# QUOR-03: canonical at score >= PROMOTE_SCORE from >= PROMOTE_SESSIONS sessions; >= 2 sessions below it = quorum
+PROMOTE_SCORE = 1.5
+PROMOTE_SESSIONS = 2
+INJECT_QUORUM_ENV = "HIVE_INJECT_QUORUM"
 
 
 def _clean(rec):
@@ -91,8 +95,21 @@ def add_evidence(meta, tags):
         kind = "test_pass" if hint == "test_pass" else "self_tag" if session == rec["origin_session"] else "confirm"
         if not any(e["session"] == session and e["kind"] == kind for e in rec["evidence"]):
             rec["evidence"].append({"session": session, "agent": agent, "kind": kind})
-        out[bullet_id] = rec
+        out[bullet_id] = promote(rec)
     return out
+
+
+def promote(rec):
+    """QUOR-03: scout -> quorum (>= 2 sessions) -> canonical (and score >= 1.5). Never demotes; retired stays."""
+    if rec["state"] not in ("scout", "quorum") or len(sessions(rec)) < PROMOTE_SESSIONS:
+        return rec
+    return dict(rec, state="canonical" if score(rec) >= PROMOTE_SCORE else "quorum")
+
+
+def injectable(state):
+    """Only canonical bullets reach agents; quorum too when HIVE_INJECT_QUORUM=1. Scouts never, so the
+    confirmations that promote them stay independent."""
+    return state == "canonical" or (state == "quorum" and os.environ.get(INJECT_QUORUM_ENV) in ("1", "true"))
 
 
 def sessions(rec):

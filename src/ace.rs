@@ -473,14 +473,21 @@ pub fn parse_delta(json_str: &str) -> Result<DeltaOps, String> {
 }
 
 pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Result<usize, String> {
-    apply_reserving(sections, ops, &std::collections::HashSet::new())
+    apply_reserving(
+        sections,
+        ops,
+        &std::collections::HashSet::new(),
+        &mut Vec::new(),
+    )
 }
 
-/// `apply`, but new ids also skip `reserved` (retired ids from the quorum sidecar are never reissued).
+/// `apply`, but new ids also skip `reserved` (retired ids from the quorum sidecar are never reissued), and
+/// ids an ADD reinforced as a near-duplicate are pushed to `reinforced` (QUOR-03 confirmations).
 pub fn apply_reserving(
     sections: &mut HashMap<String, Vec<Bullet>>,
     ops: &DeltaOps,
     reserved: &std::collections::HashSet<String>,
+    reinforced: &mut Vec<String>,
 ) -> Result<usize, String> {
     let mut changed = 0usize;
 
@@ -562,6 +569,7 @@ pub fn apply_reserving(
                 .find(|b| jaccard_similarity(&b.content, content) >= DUP_JACCARD)
             {
                 existing.seen += 1;
+                reinforced.push(existing.id.clone());
                 changed += 1;
                 continue;
             }
@@ -639,7 +647,8 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
     let meta_file = crate::quorum::meta_path(&path);
     let meta = crate::quorum::load(&meta_file);
     let reserved = meta.keys().cloned().collect();
-    let changed = apply_reserving(&mut sections, ops, &reserved)?;
+    let mut reinforced = Vec::new();
+    let changed = apply_reserving(&mut sections, ops, &reserved, &mut reinforced)?;
     save(vault, scope, &sections, None)?;
     // QUOR-01/PROV-04: state + origin sidecar, written under the same lock
     let after = ids(&sections);
@@ -661,6 +670,18 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
             agent: agent.clone(),
             hint: t.evidence.clone().unwrap_or_default(),
         })
+        // QUOR-03: another session independently proposing the same lesson is a confirmation
+        .chain(
+            reinforced
+                .iter()
+                .filter(|id| after.contains(*id))
+                .map(|id| crate::quorum::Tag {
+                    id: id.clone(),
+                    session: session.clone(),
+                    agent: agent.clone(),
+                    hint: String::new(),
+                }),
+        )
         .collect();
     if !added.is_empty() || !pruned.is_empty() || !evidence.is_empty() {
         added.sort();
@@ -669,6 +690,16 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
         crate::quorum::save(&meta_file, &crate::quorum::add_evidence(&next, &evidence))?;
     }
     Ok(changed)
+}
+
+/// QUOR-03: the playbook as agents may see it: only bullets whose quorum state is injectable.
+pub fn load_injectable(vault: &Path, scope: &str) -> Result<HashMap<String, Vec<Bullet>>, String> {
+    let mut sections = load(vault, scope)?;
+    let meta = crate::quorum::load(&crate::quorum::meta_path(&scope_path(vault, scope)?));
+    for bullets in sections.values_mut() {
+        bullets.retain(|b| crate::quorum::injectable(crate::quorum::state_of(&meta, &b.id)));
+    }
+    Ok(sections)
 }
 
 pub fn select_bullets(
