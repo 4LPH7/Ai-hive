@@ -144,6 +144,31 @@ pub fn active(conn: &Connection, project: &str, now: i64) -> Result<Vec<(Trace, 
     Ok(out)
 }
 
+pub const CONTEXT_MAX_TRACES: usize = 5;
+
+fn words(s: &str) -> std::collections::HashSet<String> {
+    s.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3)
+        .map(str::to_string)
+        .collect()
+}
+
+/// TRACE-04: `hive_context` section. With a task, keep traces whose target/summary share a word with it.
+pub fn context_section(items: &[(Trace, f64)], task: &str) -> String {
+    let want = words(task);
+    let lines: Vec<String> = items
+        .iter()
+        .filter(|(t, _)| want.is_empty() || !words(&format!("{} {}", t.target, t.summary)).is_disjoint(&want))
+        .take(CONTEXT_MAX_TRACES)
+        .map(|(t, w)| format!("- {} {} ({}, w={:.2}): {}", t.kind, t.target, t.agent, w, t.summary))
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!("## live traces (decaying signals from other agents)\n{}", lines.join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +263,20 @@ mod tests {
         )
         .is_err());
         assert!(add(&c, "demo", "DEAD_END", " ", "y", "a", "s", 0).is_err());
+    }
+
+    #[test]
+    fn test_context_section_filters_by_task_overlap() {
+        let c = db();
+        add(&c, "demo", "DEAD_END", "src/tokenizer.rs", "patching breaks static link", "claude", "s1", 0).unwrap();
+        add(&c, "demo", "HOT_FILE", "src/ui.rs", "3 failed runs", "codex", "s2", 0).unwrap();
+        let items = active(&c, "demo", H).unwrap();
+        let s = context_section(&items, "fix the tokenizer link error");
+        assert!(s.starts_with("## live traces"));
+        assert!(s.contains("DEAD_END src/tokenizer.rs"));
+        assert!(!s.contains("src/ui.rs"));
+        assert!(context_section(&items, "").contains("src/ui.rs"));
+        assert_eq!(context_section(&items, "unrelated words only"), "");
+        assert_eq!(context_section(&[], ""), "");
     }
 }

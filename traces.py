@@ -4,6 +4,8 @@ Agents leave short decaying signals in the disposable hive.sqlite: strength halv
 traces under MIN_STRENGTH are hidden, rows older than 7 days are purged. Canonical Markdown is never touched.
 (Named traces.py: `trace` is a stdlib module.)
 """
+import re
+
 import ace
 
 KINDS = {"DEAD_END": 24.0, "RECENT_FIX": 48.0, "HOT_FILE": 12.0}  # ACTIVE_LEASE waits for TRACE-06
@@ -75,3 +77,18 @@ def active(db, project, now):
             out.append((t, w))
     out.sort(key=lambda x: -x[1])
     return out
+
+
+CONTEXT_MAX_TRACES = 5
+
+
+def _words(s):
+    return {w for w in re.split(r"[\W_]+", s.lower()) if len(w) >= 3}
+
+
+def context_section(items, task):
+    """TRACE-04 hive_context section; with a task, keep traces sharing a word with it."""
+    want = _words(task)
+    lines = [f"- {t['kind']} {t['target']} ({t['agent']}, w={w:.2f}): {t['summary']}"
+             for t, w in items if not want or _words(f"{t['target']} {t['summary']}") & want][:CONTEXT_MAX_TRACES]
+    return "## live traces (decaying signals from other agents)\n" + "\n".join(lines) if lines else ""

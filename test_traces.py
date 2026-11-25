@@ -44,6 +44,24 @@ class TracesTest(unittest.TestCase):
                 traces.add(self.db, *args, "a", "s", 0)
 
 
+class ContextSectionTest(unittest.TestCase):
+    """TRACE-04 parity with trace::context_section."""
+
+    def test_filters_by_task_overlap(self):
+        db = sqlite3.connect(":memory:")
+        traces.add(db, "demo", "DEAD_END", "src/tokenizer.rs", "patching breaks static link", "claude", "s1", 0)
+        traces.add(db, "demo", "HOT_FILE", "src/ui.rs", "3 failed runs", "codex", "s2", 0)
+        items = traces.active(db, "demo", H)
+        s = traces.context_section(items, "fix the tokenizer link error")
+        self.assertTrue(s.startswith("## live traces"))
+        self.assertIn("DEAD_END src/tokenizer.rs", s)
+        self.assertNotIn("src/ui.rs", s)
+        self.assertIn("src/ui.rs", traces.context_section(items, ""))
+        self.assertEqual(traces.context_section(items, "unrelated words only"), "")
+        self.assertEqual(traces.context_section([], ""), "")
+        db.close()
+
+
 class TraceCliFallbackTest(unittest.TestCase):
     """TRACE-03 Python fallback of `hive trace add|list`."""
 

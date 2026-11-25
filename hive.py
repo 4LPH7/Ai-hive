@@ -168,7 +168,7 @@ INSTRUCTIONS = ("Shared memory for all coding agents (Obsidian vault + graphify 
 
 READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 LIST_CACHE = {"ttlMs": 3600000, "cacheScope": "public"}  # required on modern tools/list + server/discover
-DEFAULT_SECTION_WEIGHTS = {"memory": 0.35, "playbook": 0.15, "task_notes": 0.25, "code_graph": 0.25}
+DEFAULT_SECTION_WEIGHTS = {"memory": 0.35, "playbook": 0.15, "task_notes": 0.20, "traces": 0.10, "code_graph": 0.25}
 FORWARD_WEIGHT = float(os.environ.get("HIVE_PPR_FWD", 0.7))
 REVERSE_WEIGHT = float(os.environ.get("HIVE_PPR_REV", 0.3))
 
@@ -797,6 +797,16 @@ def pack(sections, budget=1500, weights=None):
     return result
 
 
+def traces_section(db, project, task):
+    """TRACE-04: live traces for hive_context; a broken trace table never blocks context."""
+    try:
+        import traces
+        return traces.context_section(traces.active(db, project, int(time.time())), task)
+    except (sqlite3.Error, ValueError) as exc:
+        print(f"hive: traces skipped: {exc}", file=sys.stderr)
+        return ""
+
+
 def tool_context(project, task="", budget=1500):
     t0 = time.time()
     project = validate_slug(project)
@@ -864,6 +874,7 @@ def tool_context(project, task="", budget=1500):
         "memory": memory_section,
         "playbook": playbook_section,
         "task_notes": task_notes_section,
+        "traces": traces_section(idx.db, project, task),
         "code_graph": code_graph_section,
     }
     try:
