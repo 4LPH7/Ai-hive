@@ -1331,8 +1331,16 @@ def tool_curate(*args):
     parser.add_argument("--project")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--config")
+    parser.add_argument("--conflicts", action="store_true", help="QUOR-05: judge playbook conflicts into inbox/")
     parsed = parser.parse_args(args)
     cfg = load_config(cli_config=parsed.config)
+    if parsed.conflicts:
+        res = curate.run_curate_conflicts(cfg["vault"], parsed.project, dry_run=parsed.dry_run,
+                                          config_path=parsed.config)
+        if res["skipped"]:
+            return f"curate --conflicts: {res['model']} ({res['reason']})"
+        out = f"curate --conflicts: model={res['model']} conflicts={res['conflicts']} verdicts={res['verdicts']}"
+        return out + (f"\n  proposal written to: {res['proposal_file']}" if res["proposal_file"] else "")
     res = curate.run_curate(
         ledger_path=cfg["ledger"],
         vault_path=cfg["vault"],

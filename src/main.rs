@@ -114,6 +114,9 @@ enum Commands {
         project: Option<String>,
         #[arg(long)]
         dry_run: bool,
+        /// QUOR-05: judge playbook conflicts and write a cited proposal to inbox/ only
+        #[arg(long)]
+        conflicts: bool,
     },
     /// ACE playbook curator operations
     Ace {
@@ -402,7 +405,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
-            Commands::Curate { project, dry_run } => {
+            Commands::Curate {
+                project,
+                dry_run,
+                conflicts: true,
+            } => {
+                let res = ai_hive::curate::run_curate_conflicts(
+                    &cfg.vault,
+                    project.as_deref(),
+                    dry_run,
+                    cli.config.as_deref(),
+                    None,
+                )?;
+                if res.skipped {
+                    println!(
+                        "curate --conflicts: {} ({})",
+                        res.model,
+                        res.reason.unwrap_or_default()
+                    );
+                } else {
+                    println!(
+                        "curate --conflicts: model={} conflicts={} verdicts={}",
+                        res.model, res.conflicts, res.verdicts
+                    );
+                    if let Some(file) = res.proposal_file {
+                        println!("  proposal written to: {}", file);
+                    }
+                }
+            }
+            Commands::Curate {
+                project, dry_run, ..
+            } => {
                 let res = ai_hive::curate::run_curate(
                     &cfg.ledger,
                     &cfg.vault,
