@@ -22,8 +22,8 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/4LPH7/Ai-hive"
-Issues = "https://github.com/4LPH7/Ai-hive/issues"
+Repository = "https://github.com/4LPH7/Hive_Mind"
+Issues = "https://github.com/4LPH7/Hive_Mind/issues"
 
 [project.scripts]
 hive = "hive:main"
