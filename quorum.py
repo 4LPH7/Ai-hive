@@ -13,6 +13,17 @@ from pathlib import Path
 STATES = ("scout", "quorum", "canonical", "retired")
 DEFAULT_STATE = "canonical"
 FIELDS = ("id", "state", "origin_session", "origin_agent")
+EVIDENCE_FIELDS = ("session", "agent", "kind")
+# QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0)
+WEIGHTS = {"test_pass": 1.0, "confirm": 1.0, "self_tag": 0.35}
+
+
+def _clean(rec):
+    out = {k: str(rec.get(k, "")) for k in FIELDS}
+    ev = rec.get("evidence") if isinstance(rec.get("evidence"), list) else []
+    out["evidence"] = [{k: str(e.get(k, "")) for k in EVIDENCE_FIELDS} for e in ev
+                       if isinstance(e, dict) and e.get("kind") in WEIGHTS and e.get("session")]
+    return out
 
 
 def meta_path(playbook_path):
@@ -22,7 +33,7 @@ def meta_path(playbook_path):
 
 def dumps(rec):
     """Compact, fixed key order: byte-identical to the Rust serializer."""
-    return json.dumps({k: str(rec.get(k, "")) for k in FIELDS}, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(_clean(rec), separators=(",", ":"), ensure_ascii=False)
 
 
 def load(path):
@@ -38,7 +49,7 @@ def load(path):
         except json.JSONDecodeError:
             continue
         if isinstance(rec, dict) and isinstance(rec.get("id"), str) and rec.get("state") in STATES:
-            out[rec["id"]] = {k: str(rec.get(k, "")) for k in FIELDS}
+            out[rec["id"]] = _clean(rec)
     return out
 
 
@@ -57,8 +68,40 @@ def reconcile(meta, added, pruned, session, agent):
     """New meta: added ids become scouts with origin; pruned ids become retired; others untouched."""
     out = {i: dict(r) for i, r in meta.items()}
     for i in added:
-        out[i] = {"id": i, "state": "scout", "origin_session": session, "origin_agent": agent}
+        out[i] = {"id": i, "state": "scout", "origin_session": session, "origin_agent": agent, "evidence": []}
     for i in pruned:
-        rec = out.get(i) or {"id": i, "state": DEFAULT_STATE, "origin_session": "", "origin_agent": ""}
-        out[i] = dict(rec, state="retired")
+        out[i] = dict(_entry(out, i), state="retired")
     return out
+
+
+def _entry(meta, bullet_id):
+    return meta.get(bullet_id) or {"id": bullet_id, "state": DEFAULT_STATE, "origin_session": "",
+                                   "origin_agent": "", "evidence": []}
+
+
+def add_evidence(meta, tags):
+    """QUOR-02. tags: [(bullet_id, session, agent, hint)] for helpful TAGs. hint 'test_pass' (from ledger score)
+    keeps its kind; otherwise the origin session tagging its own bullet is 'self_tag', any other is 'confirm'.
+    A (session, kind) pair is recorded once."""
+    out = {i: _clean(r) for i, r in meta.items()}
+    for bullet_id, session, agent, hint in tags:
+        if not session:
+            continue
+        rec = _clean(_entry(out, bullet_id))
+        kind = "test_pass" if hint == "test_pass" else "self_tag" if session == rec["origin_session"] else "confirm"
+        if not any(e["session"] == session and e["kind"] == kind for e in rec["evidence"]):
+            rec["evidence"].append({"session": session, "agent": agent, "kind": kind})
+        out[bullet_id] = rec
+    return out
+
+
+def sessions(rec):
+    return {e["session"] for e in _clean(rec)["evidence"]}
+
+
+def score(rec):
+    """Sum over sessions of each session's strongest evidence weight."""
+    best = {}
+    for e in _clean(rec)["evidence"]:
+        best[e["session"]] = max(best.get(e["session"], 0.0), WEIGHTS[e["kind"]])
+    return round(sum(best.values()), 6)

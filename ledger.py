@@ -209,7 +209,10 @@ def score_session(session_id=None, repo_dir=None, test_exit_code=0, ledger_path=
 
     ops = []
     for b in injected_bullets:
-        ops.append({"type": "TAG", "id": b, tag_field: 1})
+        op = {"type": "TAG", "id": b, tag_field: 1, "session": session_id}
+        if is_success:  # QUOR-02: a passing test run in the bullet's session is the strongest evidence
+            op["evidence"] = "test_pass"
+        ops.append(op)
     for s in triggered_skills:
         ops.append({"type": "TAG", "id": f"skill:{s}", tag_field: 1})
 

@@ -418,6 +418,9 @@ pub fn score_session(
             id: b.clone(),
             helpful: if is_success { Some(1) } else { None },
             harmful: if !is_success { Some(1) } else { None },
+            session: Some(target_session_id.clone()),
+            // QUOR-02: a passing test run in the bullet's session is the strongest evidence
+            evidence: is_success.then(|| "test_pass".to_string()),
         });
     }
     for s in &skills {
@@ -425,6 +428,8 @@ pub fn score_session(
             id: format!("skill:{}", s),
             helpful: if is_success { Some(1) } else { None },
             harmful: if !is_success { Some(1) } else { None },
+            session: None,
+            evidence: None,
         });
     }
 

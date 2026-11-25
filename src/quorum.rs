@@ -10,6 +10,22 @@ use std::path::{Path, PathBuf};
 pub const STATES: [&str; 4] = ["scout", "quorum", "canonical", "retired"];
 pub const DEFAULT_STATE: &str = "canonical";
 
+/// QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0).
+pub const WEIGHTS: [(&str, f64); 3] = [("test_pass", 1.0), ("confirm", 1.0), ("self_tag", 0.35)];
+
+fn weight(kind: &str) -> Option<f64> {
+    WEIGHTS.iter().find(|(k, _)| *k == kind).map(|(_, w)| *w)
+}
+
+/// Field order is the wire order: byte-identical to `quorum.dumps`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Evidence {
+    pub session: String,
+    #[serde(default)]
+    pub agent: String,
+    pub kind: String,
+}
+
 /// Field order is the wire order: byte-identical to `quorum.dumps`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Meta {
@@ -19,6 +35,29 @@ pub struct Meta {
     pub origin_session: String,
     #[serde(default)]
     pub origin_agent: String,
+    #[serde(default)]
+    pub evidence: Vec<Evidence>,
+}
+
+impl Meta {
+    fn legacy(id: &str) -> Self {
+        Meta {
+            id: id.into(),
+            state: DEFAULT_STATE.into(),
+            origin_session: String::new(),
+            origin_agent: String::new(),
+            evidence: Vec::new(),
+        }
+    }
+}
+
+/// A helpful TAG turned into evidence: `hint` is `test_pass` from `ledger score`, else empty.
+#[derive(Debug, Clone)]
+pub struct Tag {
+    pub id: String,
+    pub session: String,
+    pub agent: String,
+    pub hint: String,
 }
 
 pub type MetaMap = BTreeMap<String, Meta>;
@@ -28,7 +67,7 @@ pub fn meta_path(playbook: &Path) -> PathBuf {
     playbook.with_file_name(format!("{stem}.meta.jsonl"))
 }
 
-/// Unreadable lines and unknown states are skipped (fail-open).
+/// Unreadable lines and unknown states are skipped; unknown evidence kinds dropped (fail-open).
 pub fn load(path: &Path) -> MetaMap {
     let Ok(text) = std::fs::read_to_string(path) else {
         return MetaMap::new();
@@ -36,7 +75,11 @@ pub fn load(path: &Path) -> MetaMap {
     text.lines()
         .filter_map(|l| serde_json::from_str::<Meta>(l).ok())
         .filter(|m| STATES.contains(&m.state.as_str()))
-        .map(|m| (m.id.clone(), m))
+        .map(|mut m| {
+            m.evidence
+                .retain(|e| weight(&e.kind).is_some() && !e.session.is_empty());
+            (m.id.clone(), m)
+        })
         .collect()
 }
 
@@ -74,20 +117,62 @@ pub fn reconcile(
                 state: "scout".into(),
                 origin_session: session.into(),
                 origin_agent: agent.into(),
+                evidence: Vec::new(),
             },
         );
     }
     for id in pruned {
-        let mut m = out.get(id).cloned().unwrap_or(Meta {
-            id: id.clone(),
-            state: DEFAULT_STATE.into(),
-            origin_session: String::new(),
-            origin_agent: String::new(),
-        });
+        let mut m = out.get(id).cloned().unwrap_or_else(|| Meta::legacy(id));
         m.state = "retired".into();
         out.insert(id.clone(), m);
     }
     out
+}
+
+/// QUOR-02: record helpful tags. `test_pass` keeps its kind; otherwise the origin session tagging its own
+/// bullet is `self_tag`, any other session `confirm`. A (session, kind) pair is recorded once.
+pub fn add_evidence(meta: &MetaMap, tags: &[Tag]) -> MetaMap {
+    let mut out = meta.clone();
+    for t in tags.iter().filter(|t| !t.session.is_empty()) {
+        let rec = out
+            .entry(t.id.clone())
+            .or_insert_with(|| Meta::legacy(&t.id));
+        let kind = if t.hint == "test_pass" {
+            "test_pass"
+        } else if t.session == rec.origin_session {
+            "self_tag"
+        } else {
+            "confirm"
+        };
+        if !rec
+            .evidence
+            .iter()
+            .any(|e| e.session == t.session && e.kind == kind)
+        {
+            rec.evidence.push(Evidence {
+                session: t.session.clone(),
+                agent: t.agent.clone(),
+                kind: kind.into(),
+            });
+        }
+    }
+    out
+}
+
+pub fn sessions(rec: &Meta) -> std::collections::BTreeSet<String> {
+    rec.evidence.iter().map(|e| e.session.clone()).collect()
+}
+
+/// Sum over sessions of each session's strongest evidence weight.
+pub fn score(rec: &Meta) -> f64 {
+    let mut best: BTreeMap<&str, f64> = BTreeMap::new();
+    for e in &rec.evidence {
+        if let Some(w) = weight(&e.kind) {
+            let slot = best.entry(e.session.as_str()).or_insert(0.0);
+            *slot = slot.max(w);
+        }
+    }
+    (best.values().sum::<f64>() * 1e6).round() / 1e6
 }
 
 #[cfg(test)]
@@ -96,15 +181,64 @@ mod tests {
 
     #[test]
     fn test_serialization_matches_python_mirror() {
-        let m = Meta {
+        let mut m = Meta {
             id: "pit-00001".into(),
             state: "scout".into(),
             origin_session: "s".into(),
             origin_agent: "a".into(),
+            evidence: Vec::new(),
         };
         assert_eq!(
             serde_json::to_string(&m).unwrap(),
-            r#"{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a"}"#
+            r#"{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a","evidence":[]}"#
+        );
+        m.evidence.push(Evidence {
+            session: "s2".into(),
+            agent: "codex".into(),
+            kind: "confirm".into(),
+        });
+        assert!(serde_json::to_string(&m)
+            .unwrap()
+            .contains(r#""evidence":[{"session":"s2","agent":"codex","kind":"confirm"}]"#));
+    }
+
+    #[test]
+    fn test_evidence_weights_and_same_session_repeat() {
+        let meta = reconcile(&MetaMap::new(), &["pit-00001".into()], &[], "sa", "claude");
+        let tag = |m: &MetaMap, s: &str, hint: &str| {
+            add_evidence(
+                m,
+                &[Tag {
+                    id: "pit-00001".into(),
+                    session: s.into(),
+                    agent: "claude".into(),
+                    hint: hint.into(),
+                }],
+            )
+        };
+        let m = tag(&meta, "sa", "");
+        assert_eq!(score(&m["pit-00001"]), 0.35);
+        let m = tag(&m, "sa", "");
+        assert_eq!(score(&m["pit-00001"]), 0.35);
+        let m = tag(&m, "sa", "test_pass");
+        assert_eq!(score(&m["pit-00001"]), 1.0);
+        let m = tag(&m, "sb", "");
+        assert_eq!(score(&m["pit-00001"]), 2.0);
+        assert_eq!(sessions(&m["pit-00001"]).len(), 2);
+        // Python-form TAG {id, helpful: n, session, evidence} must survive parse_delta
+        let d = crate::ace::parse_delta(
+            r#"{"operations":[{"type":"TAG","id":"x","helpful":2,"session":"s9","evidence":"test_pass"}]}"#,
+        )
+        .unwrap();
+        let t = &d.tag.unwrap()[0];
+        assert_eq!(
+            (t.helpful, t.session.as_deref(), t.evidence.as_deref()),
+            (Some(2), Some("s9"), Some("test_pass"))
+        );
+        let legacy = tag(&MetaMap::new(), "sa", "");
+        assert_eq!(
+            (state_of(&legacy, "pit-00001"), score(&legacy["pit-00001"])),
+            ("canonical", 1.0)
         );
     }
 

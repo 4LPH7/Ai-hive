@@ -48,7 +48,9 @@ class QuorumSidecarTest(unittest.TestCase):
 
     def test_line_serialization_is_compact_and_ordered(self):
         self.assertEqual(quorum.dumps({"origin_agent": "a", "state": "scout", "id": "pit-00001", "origin_session": "s"}),
-                         '{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a"}')
+                         '{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a","evidence":[]}')
+        rec = {"id": "x", "state": "scout", "evidence": [{"kind": "confirm", "agent": "codex", "session": "s2"}]}
+        self.assertIn('"evidence":[{"session":"s2","agent":"codex","kind":"confirm"}]', quorum.dumps(rec))
 
     def test_bad_lines_and_states_are_ignored(self):
         p = self.vault / "playbook.meta.jsonl"
@@ -56,6 +58,34 @@ class QuorumSidecarTest(unittest.TestCase):
                      encoding="utf-8")
         m = quorum.load(p)
         self.assertEqual(sorted(m), ["pit-00003"])
+
+
+class QuorumEvidenceTest(QuorumSidecarTest):
+    """QUOR-02: test+commit 1.0, other-session confirm 1.0, self-tag 0.35, same-session repeat 0."""
+
+    def test_evidence_weights_and_same_session_repeat(self):
+        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "scout lesson on cache keys"}])["added"]
+        tag = lambda **kw: ace.apply("demo", [dict({"type": "TAG", "id": bid, "tag": "helpful"}, **kw)])
+        tag()  # origin session sess-a -> self_tag
+        self.assertAlmostEqual(quorum.score(self.meta()[bid]), 0.35)
+        tag()  # same session again -> nothing new
+        self.assertAlmostEqual(quorum.score(self.meta()[bid]), 0.35)
+        tag(session="sess-a", evidence="test_pass")  # same session, stronger kind: max per session
+        self.assertAlmostEqual(quorum.score(self.meta()[bid]), 1.0)
+        tag(session="sess-b")  # another session confirms
+        rec = self.meta()[bid]
+        self.assertAlmostEqual(quorum.score(rec), 2.0)
+        self.assertEqual(quorum.sessions(rec), {"sess-a", "sess-b"})
+        ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "harmful", "session": "sess-c"}])
+        self.assertAlmostEqual(quorum.score(self.meta()[bid]), 2.0, msg="harmful tags are not evidence")
+
+    def test_legacy_bullet_gets_evidence_but_stays_canonical(self):
+        path = ace.scope_path("demo")
+        path.parent.mkdir(parents=True)
+        path.write_text("## pitfalls\n- [pit-00001] seen=2 helpful=2 harmful=0 :: legacy lesson here\n", encoding="utf-8")
+        ace.apply("demo", [{"type": "TAG", "id": "pit-00001", "tag": "helpful"}])
+        rec = self.meta()["pit-00001"]
+        self.assertEqual((rec["state"], quorum.score(rec)), ("canonical", 1.0))
 
 
 if __name__ == "__main__":

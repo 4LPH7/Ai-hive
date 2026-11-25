@@ -339,6 +339,18 @@ def apply_ops(sections, ops, today=None, reserved=()):
     return new, report
 
 
+def helpful_tags(ops, live_ids, session, agent):
+    """QUOR-02 evidence from helpful TAG ops on live bullets: [(id, session, agent, hint)]. An op may name the
+    session it speaks for (`ledger score` credits the scored session) and an `evidence` hint (`test_pass`)."""
+    out = []
+    for op in ops if isinstance(ops, list) else []:
+        if not isinstance(op, dict) or str(op.get("type", "")).upper() != "TAG" or op.get("id") not in live_ids:
+            continue
+        if op.get("tag") == "helpful" or (not op.get("tag") and op.get("helpful")):
+            out.append((op["id"], str(op.get("session") or session), agent, op.get("evidence", "")))
+    return out
+
+
 def apply(scope, ops, today=None):
     """Load, apply ops under atomic lock, save, return report."""
     path = scope_path(scope)
@@ -349,10 +361,13 @@ def apply(scope, ops, today=None):
         meta = quorum.load(meta_file)
         new_sections, report = apply_ops(current, ops, today=today, reserved=meta.keys())
         save(scope, new_sections, today=today)
-        if report["added"] or report["pruned"]:  # QUOR-01/PROV-04: state + origin sidecar, same lock
-            import ledger
-            quorum.save(meta_file, quorum.reconcile(meta, report["added"], report["pruned"],
-                                                    ledger.resolve_session(), ledger.resolve_agent()))
+        import ledger
+        session, agent = ledger.resolve_session(), ledger.resolve_agent()
+        live = {b["id"] for bullets in new_sections.values() for b in bullets}
+        evidence = helpful_tags(ops, live, session, agent)
+        if report["added"] or report["pruned"] or evidence:  # QUOR-01/02, PROV-04: sidecar, same lock
+            meta = quorum.reconcile(meta, report["added"], report["pruned"], session, agent)
+            quorum.save(meta_file, quorum.add_evidence(meta, evidence))
     try:  # PROV-02/04: who merged which bullets, at which commit; fail-open
         import hashlib
         import ledger

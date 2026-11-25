@@ -396,6 +396,12 @@ pub struct TagOp {
     pub id: String,
     pub helpful: Option<i64>,
     pub harmful: Option<i64>,
+    /// QUOR-02: the session this tag speaks for (`ledger score` credits the scored session)
+    #[serde(default)]
+    pub session: Option<String>,
+    /// QUOR-02: evidence hint, `test_pass` from a passing scored session
+    #[serde(default)]
+    pub evidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -439,19 +445,25 @@ pub fn parse_delta(json_str: &str) -> Result<DeltaOps, String> {
                 section: field("section"),
                 content: field("content"),
             }),
-            "TAG" => match field("tag").as_str() {
-                "helpful" => tags.push(TagOp {
-                    id: field("id"),
-                    helpful: Some(1),
-                    harmful: None,
-                }),
-                "harmful" => tags.push(TagOp {
-                    id: field("id"),
-                    helpful: None,
-                    harmful: Some(1),
-                }),
-                _ => {} // neutral
-            },
+            "TAG" => {
+                let num = |k: &str| op.get(k).and_then(|x| x.as_i64()).filter(|n| *n > 0);
+                let (helpful, harmful) = match field("tag").as_str() {
+                    "helpful" => (Some(1), None),
+                    "harmful" => (None, Some(1)),
+                    "" => (num("helpful"), num("harmful")), // Python form {id, helpful: n}
+                    _ => (None, None),                      // neutral
+                };
+                let opt = |k: &str| Some(field(k)).filter(|s| !s.is_empty());
+                if helpful.is_some() || harmful.is_some() {
+                    tags.push(TagOp {
+                        id: field("id"),
+                        helpful,
+                        harmful,
+                        session: opt("session"),
+                        evidence: opt("evidence"),
+                    });
+                }
+            }
             other => return Err(format!("unknown operation type {other:?}")),
         }
     }
@@ -633,17 +645,28 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
     let after = ids(&sections);
     let mut added: Vec<String> = after.difference(&before).cloned().collect();
     let mut pruned: Vec<String> = before.difference(&after).cloned().collect();
-    if !added.is_empty() || !pruned.is_empty() {
+    let (session, agent) = (
+        crate::ledger::resolve_session(None),
+        crate::ledger::resolve_agent(None),
+    );
+    // QUOR-02 evidence: helpful tags on live bullets
+    let evidence: Vec<crate::quorum::Tag> = ops
+        .tag
+        .iter()
+        .flatten()
+        .filter(|t| t.helpful.unwrap_or(0) > 0 && after.contains(&t.id))
+        .map(|t| crate::quorum::Tag {
+            id: t.id.clone(),
+            session: t.session.clone().unwrap_or_else(|| session.clone()),
+            agent: agent.clone(),
+            hint: t.evidence.clone().unwrap_or_default(),
+        })
+        .collect();
+    if !added.is_empty() || !pruned.is_empty() || !evidence.is_empty() {
         added.sort();
         pruned.sort();
-        let next = crate::quorum::reconcile(
-            &meta,
-            &added,
-            &pruned,
-            &crate::ledger::resolve_session(None),
-            &crate::ledger::resolve_agent(None),
-        );
-        crate::quorum::save(&meta_file, &next)?;
+        let next = crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent);
+        crate::quorum::save(&meta_file, &crate::quorum::add_evidence(&next, &evidence))?;
     }
     Ok(changed)
 }
