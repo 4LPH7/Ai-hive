@@ -2,6 +2,51 @@ use ai_hive::ace::is_secret;
 use ai_hive::common::{active_work_cell_matches, validate_slug};
 use ai_hive::packer::{pack, Section};
 
+/// TRACE-03: `hive trace add` writes only the disposable db; `hive trace list` reads it back.
+#[test]
+fn test_trace_cli_add_and_list() {
+    let tmp = std::env::temp_dir().join(format!("hive_trace_cli_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("vault")).unwrap();
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .env("HIVE_DB", tmp.join("hive.sqlite"))
+            .env("HIVE_LEDGER", tmp.join("ledger.jsonl"))
+            .env("HIVE_VAULT", tmp.join("vault"))
+            .env("HIVE_SESSION_ID", "cli-test")
+            .env("HIVE_AGENT", "claude")
+            .output()
+            .unwrap()
+    };
+    let out = run(&[
+        "trace",
+        "add",
+        "demo",
+        "DEAD_END",
+        "src/a.rs",
+        "tokenizer patch breaks static link",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let bad = run(&["trace", "add", "demo", "BOGUS", "x", "y"]);
+    assert!(!bad.status.success());
+
+    let list = String::from_utf8_lossy(&run(&["trace", "list", "demo"]).stdout).to_string();
+    assert!(
+        list.contains("DEAD_END") && list.contains("src/a.rs") && list.contains("claude"),
+        "{list}"
+    );
+    let other = String::from_utf8_lossy(&run(&["trace", "list", "other"]).stdout).to_string();
+    assert!(other.contains("no active traces"), "{other}");
+    // zero canonical files written by trace add
+    assert_eq!(std::fs::read_dir(tmp.join("vault")).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn test_milestone1_regression_f3_path_traversal() {
     assert!(validate_slug("ai-hive").is_ok());

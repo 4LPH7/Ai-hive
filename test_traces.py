@@ -44,5 +44,26 @@ class TracesTest(unittest.TestCase):
                 traces.add(self.db, *args, "a", "s", 0)
 
 
+class TraceCliFallbackTest(unittest.TestCase):
+    """TRACE-03 Python fallback of `hive trace add|list`."""
+
+    def test_add_and_list_use_the_disposable_db_only(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        import hive
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(hive, "DB_PATH", Path(tmp) / "hive.sqlite"):
+                out = hive.tool_trace("add", "demo", "dead_end", "src/a.rs", "tokenizer", "patch", "breaks")
+                self.assertIn("DEAD_END", out)
+                listing = hive.tool_trace("list", "demo")
+                self.assertIn("src/a.rs", listing)
+                self.assertIn("tokenizer patch breaks", listing)
+                self.assertIn("no active traces", hive.tool_trace("list", "other"))
+                with self.assertRaises(SystemExit):
+                    hive.tool_trace("add", "demo", "BOGUS", "x", "y")
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir() if p.suffix == ".sqlite"), ["hive.sqlite"])
+
+
 if __name__ == "__main__":
     unittest.main()

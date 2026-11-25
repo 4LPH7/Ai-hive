@@ -120,6 +120,24 @@ enum Commands {
         #[command(subcommand)]
         cmd: AceCommands,
     },
+    /// Stigmergic traces: short decaying signals agents leave for each other (writes only hive.sqlite)
+    Trace {
+        #[command(subcommand)]
+        cmd: TraceCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TraceCommands {
+    /// Leave a trace: kind is DEAD_END, RECENT_FIX or HOT_FILE
+    Add {
+        project: String,
+        kind: String,
+        target: String,
+        summary: String,
+    },
+    /// Show active traces for a project, strongest first
+    List { project: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -387,6 +405,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     if let Some(file) = res.proposal_file {
                         println!("  proposal written to: {}", file);
+                    }
+                }
+            }
+            Commands::Trace { cmd } => {
+                if let Some(parent) = cfg.db.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let conn = rusqlite::Connection::open(&cfg.db)?;
+                conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")?;
+                let now = chrono::Utc::now().timestamp();
+                match cmd {
+                    TraceCommands::Add {
+                        project,
+                        kind,
+                        target,
+                        summary,
+                    } => {
+                        let id = ai_hive::trace::add(
+                            &conn,
+                            &project,
+                            &kind.to_ascii_uppercase(),
+                            &target,
+                            &summary,
+                            &ai_hive::ledger::resolve_agent(None),
+                            &ai_hive::ledger::resolve_session(None),
+                            now,
+                        )?;
+                        println!(
+                            "trace: {} #{} on {} ({})",
+                            kind.to_ascii_uppercase(),
+                            id,
+                            target,
+                            project
+                        );
+                    }
+                    TraceCommands::List { project } => {
+                        let rows = ai_hive::trace::active(&conn, &project, now)?;
+                        if rows.is_empty() {
+                            println!("trace: no active traces for {}", project);
+                        }
+                        for (t, w) in rows {
+                            let age_h = (now - t.created_at).max(0) / 3600;
+                            println!(
+                                "{:<10} {:.2}  {}  {} ({}, {}h ago)",
+                                t.kind, w, t.target, t.summary, t.agent, age_h
+                            );
+                        }
                     }
                 }
             }

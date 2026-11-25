@@ -1147,6 +1147,38 @@ def tool_eval(golden=str(Path(__file__).with_name("eval_golden.json")), k=5):
     return "\n".join([f"Recall@{k} {found}/{n} = {found / n:.2f}   MRR {rr / n:.3f}"] + misses)
 
 
+def tool_trace(*args):
+    """TRACE-03 CLI fallback: `trace add <project> <kind> <target> <summary>` | `trace list <project>`.
+    Writes only the disposable hive.sqlite, never the vault."""
+    import sqlite3
+    import time
+    import ledger
+    import traces
+    if len(args) >= 5 and args[0] == "add":
+        project, kind, target, summary = args[1], args[2].upper(), args[3], " ".join(args[4:])
+    elif len(args) == 2 and args[0] == "list":
+        project = args[1]
+    else:
+        raise SystemExit("usage: hive trace add <project> <kind> <target> <summary> | hive trace list <project>")
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    try:
+        now = int(time.time())
+        if args[0] == "add":
+            try:
+                tid = traces.add(db, project, kind, target, summary, ledger.resolve_agent(), ledger.resolve_session(), now)
+            except ValueError as exc:
+                raise SystemExit(f"trace: {exc}")
+            return f"trace: {kind} #{tid} on {target} ({project})"
+        rows = traces.active(db, project, now)
+        if not rows:
+            return f"trace: no active traces for {project}"
+        return "\n".join(f"{t['kind']:<10} {w:.2f}  {t['target']}  {t['summary']} "
+                         f"({t['agent']}, {max(0, now - t['created_at']) // 3600}h ago)" for t, w in rows)
+    finally:
+        db.close()
+
+
 def tool_ledger(*args, tail=None, project=None):
     import ledger
     cfg = load_config()
@@ -1331,7 +1363,7 @@ def main(argv=None):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine, "curate": tool_curate,
+        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace,
     }
     if cmd not in commands:
         print(__doc__)
