@@ -89,8 +89,12 @@ def context_section(vault, project, task):
     folder = Path(vault) / "codices" / project
     if not want or not folder.is_dir():
         return ""
+    import governance
+    hidden = governance.quarantined_paths(vault)  # GOV-02
     lines = []
     for note in sorted(folder.glob("*.md"), reverse=True)[:CONTEXT_MAX_CODICES]:
+        if note.relative_to(Path(vault)).as_posix() in hidden:
+            continue
         secs = _sections(note.read_text(encoding="utf-8", errors="replace"))
         if not traces._words(" ".join(secs.get("Files", []))) & want:
             continue

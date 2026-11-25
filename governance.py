@@ -100,11 +100,53 @@ def _origins(vault, db):
         for rec in quorum.load(quorum.meta_path(pb)).values():
             if rec["state"] in ("scout", "quorum"):
                 yield "bullets", rec["origin_session"], rec["origin_agent"], rec["origin_ts"]
-    for kind, pattern in (("inbox", "inbox/*.md"), ("codices", "codices/*/*.md")):
-        for note in sorted(vault.glob(pattern)):
-            meta, _, _ = hive.parse_note(note.read_text(encoding="utf-8", errors="replace"))
-            m = SOURCE_SESSION_RE.search(str(meta.get("source", "")))
-            yield kind, (m.group(1) if m else ""), meta.get("agent", ""), _date_ts(meta.get("updated", ""))
+    for kind, note in _notes(vault):
+        yield (kind, *note_origin(note.read_text(encoding="utf-8", errors="replace")))
+
+
+NOTE_GLOBS = (("inbox", "inbox/*.md"), ("codices", "codices/*/*.md"))
+
+
+def _notes(vault):
+    for kind, pattern in NOTE_GLOBS:
+        for note in sorted(Path(vault).glob(pattern)):
+            yield kind, note
+
+
+def note_origin(text):
+    """(session, agent, ts) of an inbox proposal or codex from its frontmatter."""
+    meta, _, _ = hive.parse_note(text)
+    m = SOURCE_SESSION_RE.search(str(meta.get("source", "")))
+    return (m.group(1) if m else ""), meta.get("agent", ""), _date_ts(meta.get("updated", ""))
+
+
+# ---------------------------------------------------------------- GOV-02 read-path filters
+def quarantined_paths(vault, rules=None):
+    """Vault-relative posix paths of inbox proposals and codices that an active rule matches."""
+    rules = load_rules(vault) if rules is None else rules
+    if not rules:
+        return set()
+    return {note.relative_to(Path(vault)).as_posix() for _, note in _notes(vault)
+            if is_quarantined(rules, *note_origin(note.read_text(encoding="utf-8", errors="replace")))}
+
+
+def note_hidden(rules, rel_path, source, agent, updated):
+    """An indexed inbox proposal or codex whose origin an active rule matches (from index columns)."""
+    if not rel_path.startswith(("inbox/", "codices/")):
+        return False
+    m = SOURCE_SESSION_RE.search(str(source or ""))
+    return is_quarantined(rules, m.group(1) if m else "", agent or "", _date_ts(updated or ""))
+
+
+def visible_traces(rules, items):
+    """Drop quarantined traces from traces.active() output."""
+    return [(t, w) for t, w in items if not is_quarantined(rules, t["session_id"], t["agent"], t["created_at"])]
+
+
+def bullet_hidden(rules, rec):
+    """A scout/quorum bullet whose origin an active rule matches."""
+    return bool(rules) and rec.get("state") in ("scout", "quorum") and is_quarantined(
+        rules, rec.get("origin_session", ""), rec.get("origin_agent", ""), rec.get("origin_ts", 0))
 
 
 def scan(vault, db, rule):

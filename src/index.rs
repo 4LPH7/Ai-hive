@@ -459,6 +459,14 @@ impl Index {
             }
         }
 
+        // GOV-02: quarantined inbox proposals / codices never surface (before autocut, like hive.py)
+        let rules = crate::governance::load_rules(&self.vault);
+        if !rules.is_empty() {
+            hits.retain(|h| {
+                !crate::governance::note_hidden(&rules, &h.path, &h.source, &h.agent, &h.updated)
+            });
+        }
+
         hits.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)

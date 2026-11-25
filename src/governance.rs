@@ -128,7 +128,18 @@ fn origins(vault: &Path, conn: &Connection) -> Vec<(&'static str, String, String
             }
         }
     }
-    let session_re = regex::Regex::new(r"\bsession\s+(\S+)").unwrap();
+    for (kind, path) in note_files(vault) {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let (session, agent, ts) = note_origin(&text);
+        out.push((kind, session, agent, ts));
+    }
+    out
+}
+
+/// inbox/*.md and codices/*/*.md, the note kinds a rule can quarantine.
+fn note_files(vault: &Path) -> Vec<(&'static str, PathBuf)> {
     let mut notes: Vec<(&'static str, PathBuf)> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(vault.join("inbox")) {
         notes.extend(rd.flatten().map(|e| ("inbox", e.path())));
@@ -140,22 +151,82 @@ fn origins(vault: &Path, conn: &Connection) -> Vec<(&'static str, String, String
             }
         }
     }
-    for (kind, path) in notes {
-        if path.extension().is_none_or(|x| x != "md") {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let (meta, _, _) = crate::index::parse_note(&text);
-        let get = |k: &str| meta.get(k).cloned().unwrap_or_default();
-        let session = session_re
-            .captures(&get("source"))
-            .map(|c| c[1].to_string())
-            .unwrap_or_default();
-        out.push((kind, session, get("agent"), date_ts(&get("updated"))));
+    notes.retain(|(_, p)| p.extension().is_some_and(|x| x == "md"));
+    notes
+}
+
+fn source_session(source: &str) -> String {
+    regex::Regex::new(r"\bsession\s+(\S+)")
+        .unwrap()
+        .captures(source)
+        .map(|c| c[1].to_string())
+        .unwrap_or_default()
+}
+
+/// (session, agent, ts) of an inbox proposal or codex from its frontmatter.
+pub fn note_origin(text: &str) -> (String, String, i64) {
+    let (meta, _, _) = crate::index::parse_note(text);
+    let get = |k: &str| meta.get(k).cloned().unwrap_or_default();
+    (
+        source_session(&get("source")),
+        get("agent"),
+        date_ts(&get("updated")),
+    )
+}
+
+// ---------------------------------------------------------------- GOV-02 read-path filters
+
+/// Vault-relative posix paths of inbox proposals and codices that an active rule matches.
+pub fn quarantined_paths(vault: &Path, rules: &[Rule]) -> std::collections::HashSet<String> {
+    if rules.is_empty() {
+        return Default::default();
     }
-    out
+    note_files(vault)
+        .into_iter()
+        .filter(|(_, p)| {
+            std::fs::read_to_string(p).is_ok_and(|t| {
+                let (s, a, ts) = note_origin(&t);
+                is_quarantined(rules, &s, &a, ts)
+            })
+        })
+        .filter_map(|(_, p)| {
+            p.strip_prefix(vault)
+                .ok()
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+        })
+        .collect()
+}
+
+/// An indexed inbox proposal or codex whose origin an active rule matches (from index columns).
+pub fn note_hidden(
+    rules: &[Rule],
+    rel_path: &str,
+    source: &str,
+    agent: &str,
+    updated: &str,
+) -> bool {
+    (rel_path.starts_with("inbox/") || rel_path.starts_with("codices/"))
+        && is_quarantined(rules, &source_session(source), agent, date_ts(updated))
+}
+
+/// Drop quarantined traces from trace::active() output.
+pub fn visible_traces(
+    rules: &[Rule],
+    items: Vec<(crate::trace::Trace, f64)>,
+) -> Vec<(crate::trace::Trace, f64)> {
+    items
+        .into_iter()
+        .filter(|(t, _)| !is_quarantined(rules, &t.session_id, &t.agent, t.created_at))
+        .collect()
+}
+
+/// A scout/quorum bullet whose origin an active rule matches.
+pub fn bullet_hidden(rules: &[Rule], rec: Option<&crate::quorum::Meta>) -> bool {
+    rec.is_some_and(|m| {
+        !rules.is_empty()
+            && matches!(m.state.as_str(), "scout" | "quorum")
+            && is_quarantined(rules, &m.origin_session, &m.origin_agent, m.origin_ts)
+    })
 }
 
 pub fn scan(vault: &Path, conn: &Connection, rule: &Rule) -> BTreeMap<&'static str, usize> {
@@ -272,6 +343,31 @@ mod tests {
         assert_eq!(release(&vault, &rule.id).unwrap(), 1);
         assert_eq!(load_rules(&vault).len(), 1);
         assert_eq!(parse_since("2027-01-15").unwrap(), 1_800_000_000 - 8 * 3600);
+        // GOV-02 filters: the agent rule still active hides codex traces and the codex inbox note
+        let rules = load_rules(&vault);
+        let items = crate::trace::active(&conn, "demo", 1_800_000_000).unwrap();
+        let kept = visible_traces(&rules, items);
+        assert_eq!(
+            kept.iter()
+                .map(|(t, _)| t.agent.as_str())
+                .collect::<Vec<_>>(),
+            vec!["claude"]
+        );
+        assert!(quarantined_paths(&vault, &rules).contains("inbox/x.md"));
+        assert!(note_hidden(
+            &rules,
+            "inbox/x.md",
+            "hive curate",
+            "codex",
+            "2027-01-15"
+        ));
+        assert!(!note_hidden(
+            &rules,
+            "projects/demo/x.md",
+            "",
+            "codex",
+            "2027-01-15"
+        ));
         let _ = std::fs::remove_dir_all(&vault);
     }
 }

@@ -388,13 +388,17 @@ def apply(scope, ops, today=None):
 
 def select(scopes, task="", limit=INJECT_LIMIT):
     """Top bullets across scopes: net evidence first, task-term overlap as tie-breaker boost."""
+    import governance
     want = tokens(task)
     pool = []
+    rules = governance.load_rules(VAULT)
     for scope in scopes:
         meta = quorum.load(quorum.meta_path(scope_path(scope)))  # QUOR-03: only injectable states
         for name, bullets in load(scope).items():
             for b in bullets:
                 if not quorum.injectable(quorum.state_of(meta, b["id"])):
+                    continue
+                if governance.bullet_hidden(rules, meta.get(b["id"], {})):  # GOV-02
                     continue
                 overlap = len(want & tokens(b["content"])) if want else 0
                 pool.append(((net(b) + 1) * (1 + overlap), scope, name, b))

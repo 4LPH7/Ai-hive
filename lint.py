@@ -225,6 +225,8 @@ def lint(vault=hive.VAULT, today=None, files=None):
     else:
         notes = [f for f in all_files if f.endswith(".md") and not f.startswith("_attachments/")]
     findings, inbound, outbound = [], defaultdict(set), {}
+    import governance
+    hidden = governance.quarantined_paths(vault)  # GOV-02: warn on links into a quarantine radius
     for rel in notes:
         file_path = vault / rel if not Path(rel).is_absolute() else Path(rel)
         try:
@@ -248,6 +250,9 @@ def lint(vault=hive.VAULT, today=None, files=None):
             for hit in hits:
                 inbound[hit].add(rel_posix)
                 outbound[rel_posix].add(hit)
+                if hit in hidden:
+                    findings.append(Finding("WARN", "quarantined-link", rel_posix,
+                                            f"[[{target}]] points at quarantined {hit}"))
         if meta.get("type") == "adr":
             findings += check_adr_staleness(rel_posix, text, projects_root)
             if meta.get("status") == "superseded" and not (outbound[rel_posix] - {rel_posix}):

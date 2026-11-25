@@ -343,8 +343,12 @@ class Index:
                 FROM notes_fts f JOIN notes n ON n.path = f.path
                 WHERE notes_fts MATCH ? ORDER BY s DESC LIMIT ?""", (match, limit * 4)).fetchall()
         hits = []
+        import governance
+        rules = governance.load_rules(self.vault)  # GOV-02: quarantined inbox proposals / codices never surface
         for path, title, proj, ntype, status, updated, agent, source, score, snip in rows:
             if scope == "project" and project and proj not in (project, "", "global"):
+                continue
+            if rules and governance.note_hidden(rules, path, source, agent, updated):
                 continue
             score *= TYPE_PRIOR.get(ntype, 1.0) * STATUS_PRIOR.get(status, 1.0)
             if project and proj == project:
@@ -801,8 +805,10 @@ def pack(sections, budget=1500, weights=None):
 def traces_section(db, project, task):
     """TRACE-04: live traces for hive_context; a broken trace table never blocks context."""
     try:
+        import governance
         import traces
-        live = traces.context_section(traces.active(db, project, int(time.time())), task)
+        items = governance.visible_traces(governance.load_rules(VAULT), traces.active(db, project, int(time.time())))
+        live = traces.context_section(items, task)  # GOV-02: quarantined traces never reach agents
     except (sqlite3.Error, ValueError) as exc:
         print(f"hive: traces skipped: {exc}", file=sys.stderr)
         live = ""
@@ -1245,7 +1251,8 @@ def tool_trace(*args):
             except ValueError as exc:
                 raise SystemExit(f"trace: {exc}")
             return f"trace: {kind} #{tid} on {target} ({project})"
-        rows = traces.active(db, project, now)
+        import governance
+        rows = governance.visible_traces(governance.load_rules(VAULT), traces.active(db, project, now))
         if not rows:
             return f"trace: no active traces for {project}"
         return "\n".join(f"{t['kind']:<10} {w:.2f}  {t['target']}  {t['summary']} "

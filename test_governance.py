@@ -82,6 +82,43 @@ class GovernanceTest(unittest.TestCase):
         line = (self.vault / "_meta" / "quarantine.jsonl").read_text(encoding="utf-8").splitlines()[0]
         self.assertEqual(list(json.loads(line)), ["id", "session", "agent", "since", "reason", "created"])
 
+class GovernanceReadPathTest(GovernanceTest):
+    """GOV-02: quarantined items are excluded from every read path; release brings them back; lint warns."""
+
+    def test_reads_exclude_quarantined_and_release_restores(self):
+        import hive
+        rule, _ = governance.quarantine(self.vault, self.db, session="bad-s", now=T0)
+        with mock.patch.object(hive, "VAULT", self.vault), mock.patch("time.time", return_value=T0):
+            live = hive.traces_section(self.db, "demo", "fix src/a.rs and src/b.rs")
+        self.assertIn("src/a.rs", live)
+        self.assertNotIn("src/b.rs", live, "quarantined trace hidden")
+        notes = codex.context_section(self.vault, "demo", "src/a.rs src/b.rs")
+        self.assertNotIn("lies", notes)
+        # a quarantined quorum bullet stays out even when quorum injection is on
+        mpath = quorum.meta_path(ace.scope_path("demo"))
+        meta = quorum.load(mpath)
+        meta[self.bad_bullet]["state"] = "quorum"
+        quorum.save(mpath, meta)
+        with mock.patch.dict("os.environ", {"HIVE_INJECT_QUORUM": "1"}):
+            self.assertNotIn(self.bad_bullet, {b["id"] for _, _, b in ace.select(["demo"])})
+            idx = hive.Index(self.vault, self.vault / "idx.sqlite")
+            self.assertFalse([h for h in idx.search("lies", "demo", 8) if h["path"].startswith("codices/")])
+            governance.release(self.vault, rule["id"])
+            self.assertIn(self.bad_bullet, {b["id"] for _, _, b in ace.select(["demo"])})
+            self.assertTrue([h for h in idx.search("lies", "demo", 8) if h["path"].startswith("codices/")])
+            idx.db.close()
+
+    def test_lint_warns_on_links_to_quarantined_notes(self):
+        import lint
+        bad = sorted((self.vault / "codices" / "demo").glob("2027-01-15-*.md"))[0]
+        note = self.vault / "projects" / "demo" / "notes" / "ref.md"
+        note.parent.mkdir(parents=True)
+        note.write_text("---\ntype: note\nproject: demo\nagent: claude\nstatus: active\nupdated: 2027-01-16\n"
+                        f"source: test\n---\n# ref\n\nSee [[{bad.stem}]].\n", encoding="utf-8")
+        governance.quarantine(self.vault, self.db, session="bad-s", now=T0)
+        warns = [f for f in lint.lint(self.vault) if f.code == "quarantined-link"]
+        self.assertEqual([(w.severity, w.path) for w in warns], [("WARN", "projects/demo/notes/ref.md")])
+
 
 if __name__ == "__main__":
     unittest.main()

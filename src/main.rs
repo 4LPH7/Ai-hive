@@ -511,7 +511,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     TraceCommands::List { project } => {
-                        let rows = ai_hive::trace::active(&conn, &project, now)?;
+                        let rows = ai_hive::governance::visible_traces(
+                            &ai_hive::governance::load_rules(&cfg.vault),
+                            ai_hive::trace::active(&conn, &project, now)?,
+                        );
                         if rows.is_empty() {
                             println!("trace: no active traces for {}", project);
                         }
