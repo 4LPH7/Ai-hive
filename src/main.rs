@@ -447,7 +447,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         res.model, res.conflicts, res.verdicts
                     );
                     if let Some(file) = res.proposal_file {
-                        println!("  proposal written to: {}", file);
+                        let verb = if res.dry_run {
+                            "would write (dry run)"
+                        } else {
+                            "proposal written to"
+                        };
+                        println!("  {verb}: {}", file);
                     }
                 }
             }

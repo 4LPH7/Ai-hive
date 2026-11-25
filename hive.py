@@ -1375,7 +1375,8 @@ def tool_curate(*args):
         out += "".join(f"\n  rejected: {r}" for r in res.get("rejected", []))
         if res.get("reason"):
             out += f"\n  {res['reason']}"
-        return out + (f"\n  proposal written to: {res['proposal_file']}" if res["proposal_file"] else "")
+        verb = "would write (dry run)" if res["dry_run"] else "proposal written to"
+        return out + (f"\n  {verb}: {res['proposal_file']}" if res["proposal_file"] else "")
     res = curate.run_curate(
         ledger_path=cfg["ledger"],
         vault_path=cfg["vault"],
