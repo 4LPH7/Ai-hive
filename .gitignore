@@ -4,4 +4,10 @@ __pycache__/
 *.sqlite
 *.sqlite-*
 .venv/
+target/
 eval_golden.json
+.planning/
+.agent/hooks/
+config.toml
+hive.toml
+

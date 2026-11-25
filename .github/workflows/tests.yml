@@ -5,17 +5,76 @@ on:
   pull_request:
 
 jobs:
-  unittest:
+  unittest-arch:
+    name: unittest (archlinux)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Update pacman keyring and install dependencies
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm --needed git python python-pip python-setuptools
+      - uses: actions/checkout@v4
+      - name: Configure safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Run tests (stdlib only, no model downloads)
+        run: python -W error::SyntaxWarning -m unittest -v
+      - name: Packaging smoke test
+        run: |
+          pip install --no-build-isolation --no-deps --break-system-packages .
+          python -m hive --version
+
+  unittest-windows:
+    name: unittest (windows, ${{ matrix.python }})
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.12"]
-    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
       - name: Run tests (stdlib only, no model downloads)
         run: python -W error::SyntaxWarning -m unittest -v
+      - name: Packaging smoke test
+        run: |
+          pip install --no-build-isolation --no-deps .
+          python -m hive --version
+
+  rust-arch:
+    name: rust (archlinux)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Update pacman keyring and install dependencies
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm --needed git rust
+      - uses: actions/checkout@v4
+      - name: Configure safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Run Rust unit and integration tests
+        run: cargo test --verbose
+      - name: Build release binary
+        run: cargo build --release
+
+  rust-windows:
+    name: rust (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Run cargo fmt check
+        run: cargo fmt --check
+      - name: Run cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Run Rust unit and integration tests
+        run: cargo test --verbose
+      - name: Build release binary
+        run: cargo build --release

@@ -1,0 +1,31 @@
+[package]
+name = "ai-hive"
+version = "2.5.0"
+edition = "2021"
+authors = ["4LPH7"]
+description = "High-performance shared memory MCP server for AI coding agents"
+license = "MIT"
+repository = "https://github.com/4LPH7/Ai-hive"
+homepage = "https://github.com/4LPH7/Ai-hive"
+
+[[bin]]
+name = "hive"
+path = "src/main.rs"
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+clap = { version = "4.5", features = ["derive"] }
+chrono = "0.4"
+walkdir = "2.5"
+sha2 = "0.10"
+ureq = { version = "2.10", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

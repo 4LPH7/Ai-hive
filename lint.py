@@ -2,6 +2,7 @@
 
     python lint.py [vault]      report; exit 1 if any ERROR
 """
+import json
 import os
 import re
 import sys
@@ -104,8 +105,16 @@ def check_frontmatter(rel, meta, has_frontmatter):
     if (meta.get("type") in ("adr", "note") and meta.get("agent") != "user" and rel.startswith(SOURCED_PREFIXES)
             and Path(rel).stem not in CONVENTIONAL_NAMES  # playbooks are machine-merged by ace.py
             and updated >= SOURCE_RULE_FROM and not meta.get("source")):
-        out.append(Finding("WARN", "source-missing", rel, "agent-written note needs `source:` (commit, session, URL or file)"))
+        out.append(Finding("ERROR", "source-missing", rel, "agent-written note needs `source:` (commit, session, URL or file)"))
     return out
+
+
+def check_secrets(rel, text):
+    ace = hive.ace()
+    m = ace.SECRET_RE.search(text)
+    if m:
+        return [Finding("ERROR", "secret-detected", rel, f"note appears to contain a secret: {m.group(0)[:20]}...")]
+    return []
 
 
 def check_journal(rel, body):
@@ -132,31 +141,110 @@ def check_size_and_age(rel, meta, text, today):
     return out
 
 
-def lint(vault=hive.VAULT, today=None):
+def git_staged_files(vault):
+    """Return list of staged .md files in the vault git repo."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+            cwd=str(vault), capture_output=True, text=True, check=True
+        )
+        return [line.strip().replace("\\", "/") for line in proc.stdout.splitlines() if line.strip().endswith(".md")]
+    except Exception as exc:
+        print(f"lint: warning: failed to get staged files: {exc}", file=sys.stderr)
+        return None
+
+
+def check_adr_staleness(rel, text, projects_root):
+    if not (rel.startswith("projects/") and "/adrs/" in rel):
+        return []
+    parts = rel.split("/")
+    if len(parts) < 3:
+        return []
+    slug = parts[1]
+    proj_dir = Path(projects_root) / slug
+    graphify_out = proj_dir / "graphify-out"
+    manifest_p = graphify_out / "manifest.json"
+    graph_p = graphify_out / "graph.json"
+
+    known_symbols = set()
+    deleted_symbols = set()
+    if manifest_p.is_file():
+        try:
+            m = json.loads(manifest_p.read_text(encoding="utf-8"))
+            known_symbols.update(m.get("symbols", []))
+            deleted_symbols.update(m.get("deleted_symbols", []))
+        except Exception:
+            pass
+    elif graph_p.is_file():
+        try:
+            g = json.loads(graph_p.read_text(encoding="utf-8"))
+            for node in g.get("nodes", []):
+                if node.get("name"):
+                    known_symbols.add(node["name"])
+                if node.get("label"):
+                    known_symbols.add(node["label"])
+        except Exception:
+            pass
+
+    if not known_symbols and not deleted_symbols:
+        return []
+
+    raw_symbols = re.findall(r"`([A-Za-z_][A-Za-z0-9_:]*)`", text)
+    findings = []
+    stopwords = {"true", "false", "null", "none", "str", "int", "dict", "bool", "json", "path", "self", "file"}
+    checked = set()
+    for sym in raw_symbols:
+        if sym.lower() in stopwords or len(sym) < 3 or sym in checked:
+            continue
+        checked.add(sym)
+        if sym in deleted_symbols:
+            findings.append(Finding("WARN", "adr-stale", rel, f"ADR references deleted symbol `{sym}`"))
+        elif known_symbols and sym not in known_symbols and ("::" in sym or any(c.isupper() for c in sym[1:])):
+            findings.append(Finding("WARN", "adr-stale", rel, f"ADR references symbol `{sym}` not found in graphify manifest"))
+    return findings
+
+
+def lint(vault=hive.VAULT, today=None, files=None):
     vault = Path(vault)
     today = today or date.today().isoformat()
-    files = list(walk(vault))
-    notes = [f for f in files if f.endswith(".md") and not f.startswith("_attachments/")]
-    resolver = Resolver(files)
+    projects_root = hive.load_config().get("projects", hive.PROJECTS)
+    all_files = list(walk(vault))
+    resolver = Resolver(all_files)
+    if files is not None:
+        notes = [f.replace("\\", "/") for f in files if f.endswith(".md") and not f.startswith("_attachments/")]
+    else:
+        notes = [f for f in all_files if f.endswith(".md") and not f.startswith("_attachments/")]
     findings, inbound, outbound = [], defaultdict(set), {}
     for rel in notes:
-        text = (vault / rel).read_text(encoding="utf-8", errors="replace")
+        file_path = vault / rel if not Path(rel).is_absolute() else Path(rel)
+        try:
+            rel_posix = file_path.resolve().relative_to(vault.resolve()).as_posix()
+        except (ValueError, OSError):
+            rel_posix = rel.replace("\\", "/")
+        if not file_path.is_file():
+            continue
+        text = file_path.read_text(encoding="utf-8-sig", errors="replace")
         meta, _, body = hive.parse_note(text)
-        findings += check_frontmatter(rel, meta, text.startswith("---"))
-        findings += check_size_and_age(rel, meta, text, today)
-        findings += check_journal(rel, body)
-        outbound[rel] = set()
+        findings += check_frontmatter(rel_posix, meta, text.startswith("---"))
+        findings += check_secrets(rel_posix, text)
+        findings += check_size_and_age(rel_posix, meta, text, today)
+        findings += check_journal(rel_posix, body)
+        outbound[rel_posix] = set()
         for target in links_in(body):
             hits = resolver.resolve(target)
             if not hits:
-                findings.append(Finding("WARN", "broken-link", rel, f"[[{target}]] resolves to no note or file"))
+                findings.append(Finding("WARN", "broken-link", rel_posix, f"[[{target}]] resolves to no note or file"))
             for hit in hits:
-                inbound[hit].add(rel)
-                outbound[rel].add(hit)
-        if meta.get("type") == "adr" and meta.get("status") == "superseded" and not (outbound[rel] - {rel}):
-            findings.append(Finding("ERROR", "superseded-unlinked", rel, "superseded ADR must link its successor"))
+                inbound[hit].add(rel_posix)
+                outbound[rel_posix].add(hit)
+        if meta.get("type") == "adr":
+            findings += check_adr_staleness(rel_posix, text, projects_root)
+            if meta.get("status") == "superseded" and not (outbound[rel_posix] - {rel_posix}):
+                findings.append(Finding("ERROR", "superseded-unlinked", rel_posix, "superseded ADR must link its successor"))
     findings += check_names(notes)
-    findings += check_orphans(notes, inbound)
+    if files is None:
+        findings += check_orphans(notes, inbound)
     return findings
 
 
@@ -184,11 +272,26 @@ def format_report(findings):
 
 
 def main(argv):
-    findings = lint(Path(argv[0]) if argv else hive.VAULT)
+    staged_mode = "--staged" in argv
+    rest = [a for a in argv if a != "--staged"]
+    vault = Path(rest[0]) if rest else hive.VAULT
+    if staged_mode:
+        staged = git_staged_files(vault)
+        if staged is not None and not staged:
+            sys.stdout.reconfigure(encoding="utf-8")
+            print("lint: 0 error, 0 warn, 0 info (0 staged files)")
+            return 0
+        findings = lint(vault, files=staged)
+    else:
+        findings = lint(vault)
     sys.stdout.reconfigure(encoding="utf-8")
     print(format_report(findings))
     return 1 if any(f.severity == "ERROR" for f in findings) else 0
 
 
 if __name__ == "__main__":
+    native = hive.find_native_binary()
+    if native:
+        import subprocess
+        sys.exit(subprocess.call([native, "lint", *sys.argv[1:]]))
     sys.exit(main(sys.argv[1:]))

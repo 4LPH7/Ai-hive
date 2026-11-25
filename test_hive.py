@@ -97,10 +97,22 @@ class GraphTest(unittest.TestCase):
         self.assertNotIn("far", order)  # 3 hops away, outside the 2-hop neighbourhood
         self.assertIn(("a", "calls", "b"), edges)
 
-    def test_pack_respects_budget(self):
+    def test_pack_respects_budget_and_prevents_starvation(self):
+        # Quota-based pack gives sections their share, preventing starvation while respecting budget
         out = hive.pack(["x" * 400, "y" * 4000, "z" * 400], budget=300)
-        self.assertLessEqual(hive.est_tokens(out), 320)
-        self.assertNotIn("z", out)
+        self.assertLessEqual(hive.est_tokens(out), 330)
+        self.assertIn("z", out)
+
+    def test_directed_edge_ordering_and_printing(self):
+        nodes = [{"id": "zeta_caller", "label": "zeta_caller", "file_type": "code"},
+                 {"id": "alpha_callee", "label": "alpha_callee", "file_type": "code"}]
+        links = [{"source": "zeta_caller", "target": "alpha_callee", "relation": "calls", "confidence_score": 1.0}]
+        p = Path(self.tmp.name) / "dir_graph.json"
+        p.write_text(json.dumps({"nodes": nodes, "links": links}))
+        g = hive.Graph(p)
+        ranked, edges = g.query("zeta")
+        # Direction must be caller (zeta) -> callee (alpha), not reversed by ID sorting
+        self.assertEqual(edges, [("zeta_caller", "calls", "alpha_callee")])
 
 
 class McpTest(unittest.TestCase):
@@ -154,6 +166,210 @@ class SpecAndFreshnessTest(unittest.TestCase):
             os.utime(repo / "b.py", (time.time() + 9, time.time() + 9))
             self.assertEqual(hive.changed_since_build(repo), ["b.py"])
             self.assertIsNone(hive.changed_since_build(repo / "nope"))
+
+
+class Milestone1RegressionTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name) / "vault"
+        self.vault.mkdir(parents=True, exist_ok=True)
+        self.projects = Path(self.tmp.name) / "projects"
+        self.projects.mkdir(parents=True, exist_ok=True)
+        self.db_path = Path(self.tmp.name) / "test.sqlite"
+        self.idx = hive.Index(self.vault, self.db_path)
+
+    def tearDown(self):
+        self.idx.db.close()
+        self.tmp.cleanup()
+
+    def test_f3_path_traversal_blocked(self):
+        # 1. Slug validation prevents traversal
+        with self.assertRaises(ValueError):
+            hive.validate_slug("../../outside")
+        with self.assertRaises(ValueError):
+            hive.validate_slug("..")
+        # 2. Index.note prevents reading files outside vault
+        outside = Path(self.tmp.name) / "outside.md"
+        outside.write_text("secret outside", encoding="utf-8")
+        self.assertEqual(self.idx.note("../../outside.md"), "")
+        # 3. repo_dir prevents canonical traversal outside PROJECTS
+        old_projects = hive.PROJECTS
+        try:
+            hive.PROJECTS = self.projects
+            self.assertIsNone(hive.repo_dir("../../outside"))
+            outside_repo = Path(self.tmp.name) / "outside_repo"
+            (outside_repo / "graphify-out").mkdir(parents=True, exist_ok=True)
+            self.assertIsNone(hive.repo_dir(str(outside_repo)))
+        finally:
+            hive.PROJECTS = old_projects
+
+    def test_f1_f15_quota_pack_redistribution_and_omitted_footer(self):
+        sections = {
+            "memory": "m" * 3000,
+            "playbook": "",  # empty -> its share is redistributed
+            "task_notes": "t" * 300,
+            "code_graph": "c" * 300,
+        }
+        packed = hive.pack(sections, budget=500)
+        # Verify memory was truncated to its budget and did not starve task_notes or code_graph
+        self.assertIn("...[truncated to budget]", packed)
+        self.assertIn("t" * 100, packed)
+        self.assertIn("c" * 100, packed)
+
+        # Extremely low budget causes omitted sections footer
+        tiny_pack = hive.pack({"s1": "x" * 500, "s2": "y" * 500}, budget=10)
+        self.assertIn("[omitted_sections:", tiny_pack)
+
+    def test_f1_f15_content_aware_token_estimator(self):
+        prose = "This is a regular prose sentence describing architecture."
+        code = "def fetch_data(param_a, param_b):\n    return {k: v for k, v in items.items()};\n"
+        self.assertGreater(hive.est_tokens(code), 0)
+        self.assertGreater(hive.est_tokens(prose), 0)
+        # Fenced code block counts denser than plain prose
+        fence = f"```python\n{code}\n```\n"
+        self.assertGreater(hive.est_tokens(fence), hive.est_tokens(prose))
+
+    def test_f2_strict_project_isolation(self):
+        write(self.vault, "projects/alpha/note1.md", type="note", status="active",
+              title="Alpha Topic", body="Alpha details about search.")
+        write(self.vault, "projects/beta/note2.md", type="note", status="active",
+              title="Beta Topic", body="Beta details about search.")
+        self.idx.refresh(force=True)
+
+        # Isolated to alpha
+        alpha_hits = self.idx.search("search", project="alpha", scope="project")
+        self.assertTrue(all(h["project"] in ("alpha", "", "global") for h in alpha_hits))
+        self.assertNotIn("projects/beta/note2.md", [h["path"] for h in alpha_hits])
+
+        # Cross-project scope="all"
+        all_hits = self.idx.search("search", project="alpha", scope="all")
+        paths = [h["path"] for h in all_hits]
+        self.assertIn("projects/alpha/note1.md", paths)
+        self.assertIn("projects/beta/note2.md", paths)
+
+    def test_f5_windows_bom_parse_and_indexing(self):
+        text = "\ufeff---\ntype: note\nproject: demo\nagent: user\nstatus: active\nupdated: 2026-11-23\n---\n# With BOM\nContent\n"
+        meta, title, body = hive.parse_note(text)
+        self.assertEqual(meta.get("type"), "note")
+        self.assertEqual(title, "With BOM")
+        self.assertNotIn("\ufeff", body)
+
+    def test_f11_exact_active_work_matching(self):
+        # fpolink-api should NOT match project "api"
+        cell = "[[projects/fpolink-api/_memory|fpolink-api]]"
+        self.assertFalse(hive.active_work_cell_matches(cell, "api"))
+        self.assertTrue(hive.active_work_cell_matches(cell, "fpolink-api"))
+        # Exact cell
+        self.assertTrue(hive.active_work_cell_matches("api", "api"))
+        self.assertFalse(hive.active_work_cell_matches("api-v2", "api"))
+
+    def test_f10_f14_provenance_and_untrusted_framing(self):
+        old_vault = hive.VAULT
+        old_idx = hive._INDEX
+        try:
+            hive.VAULT = self.vault
+            hive._INDEX = self.idx
+            write(self.vault, "projects/demo/_memory.md", type="project-memory", status="active",
+                  title="Demo memory", body="Critical project facts.")
+            self.idx.refresh(force=True)
+            ctx = hive.tool_context("demo")
+            self.assertIn('> [!NOTE] Untrusted vault note: path="projects/demo/_memory.md"', ctx)
+            self.assertIn("> Critical project facts.", ctx)
+        finally:
+            hive.VAULT = old_vault
+            hive._INDEX = old_idx
+
+    def test_f13_strict_mcp_argument_hygiene(self):
+        # 1. Missing required argument
+        r1 = hive.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "hive_context", "arguments": {}}})
+        self.assertTrue(r1["result"]["isError"])
+        self.assertIn("missing required argument 'project'", r1["result"]["content"][0]["text"])
+
+        # 2. Unexpected argument
+        r2 = hive.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                          "params": {"name": "hive_context", "arguments": {"project": "demo", "extra": "val"}}})
+        self.assertTrue(r2["result"]["isError"])
+        self.assertIn("unexpected argument 'extra'", r2["result"]["content"][0]["text"])
+
+        # 3. Wrong type for argument
+        r3 = hive.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                          "params": {"name": "hive_context", "arguments": {"project": "demo", "budget": "not_int"}}})
+        self.assertTrue(r3["result"]["isError"])
+        self.assertIn("must be integer", r3["result"]["content"][0]["text"])
+
+
+class ConfigAndHashSyncTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.vault = self.root / "vault"
+        self.vault.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.root / "hive.sqlite"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_load_config_precedence(self):
+        toml_path = self.root / "config.toml"
+        toml_path.write_text('vault = "/toml/vault"\nprojects = "/toml/projects"\ndb = "/toml/db"\n', encoding="utf-8")
+
+        # 1. TOML fallback when no CLI or ENV
+        old_env = {k: os.environ.pop(k, None) for k in ["HIVE_VAULT", "HIVE_PROJECTS", "HIVE_DB"]}
+        try:
+            cfg1 = hive.load_config(cli_config=str(toml_path))
+            self.assertEqual(cfg1["vault"], Path("/toml/vault"))
+            self.assertEqual(cfg1["projects"], Path("/toml/projects"))
+
+            # 2. ENV overrides TOML
+            os.environ["HIVE_VAULT"] = "/env/vault"
+            cfg2 = hive.load_config(cli_config=str(toml_path))
+            self.assertEqual(cfg2["vault"], Path("/env/vault"))
+            self.assertEqual(cfg2["projects"], Path("/toml/projects"))
+
+            # 3. CLI overrides ENV & TOML
+            cfg3 = hive.load_config(cli_vault="/cli/vault", cli_config=str(toml_path))
+            self.assertEqual(cfg3["vault"], Path("/cli/vault"))
+            self.assertEqual(cfg3["projects"], Path("/toml/projects"))
+        finally:
+            for k, v in old_env.items():
+                if v is not None:
+                    os.environ[k] = v
+
+    def test_mtime_touch_without_content_change_skips_fts_reindex(self):
+        p = write(self.vault, "projects/demo/note1.md", type="note", status="active",
+                  title="Note One", body="Stable body text.")
+        idx = hive.Index(self.vault, self.db_path)
+        self.assertEqual(idx.refresh(force=True), 1)
+
+        # Touch mtime +10s without modifying content
+        st = p.stat()
+        os.utime(p, (st.st_atime, st.st_mtime + 10))
+
+        # Refresh: hash matches existing, so changed count is 0 and no FTS reindexing occurs
+        changed = idx.refresh(force=True)
+        self.assertEqual(changed, 0)
+        idx.db.close()
+
+    def test_content_change_with_preserved_mtime_reindexes_cleanly(self):
+        p = write(self.vault, "projects/demo/note2.md", type="note", status="active",
+                  title="Original Title", body="Original body keywords.")
+        idx = hive.Index(self.vault, self.db_path)
+        self.assertEqual(idx.refresh(force=True), 1)
+        self.assertTrue(idx.search("keywords"))
+
+        # Preserve mtime, change content
+        st = p.stat()
+        orig_mtime = st.st_mtime
+        write(self.vault, "projects/demo/note2.md", type="note", status="active",
+              title="Updated Title", body="Brand new flamingo content.")
+        os.utime(p, (st.st_atime, orig_mtime))
+
+        # Refresh detects size or content change and updates index
+        idx.refresh(force=True)
+        self.assertTrue(idx.search("flamingo"))
+        self.assertFalse(idx.search("keywords"))
+        idx.db.close()
 
 
 class StdioTest(unittest.TestCase):

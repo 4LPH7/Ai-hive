@@ -5,7 +5,7 @@ PY="C:/Python315/python.exe"
 LINT="D:/PROJECTS/ai-hive/lint.py"
 [ -x "$PY" ] && [ -f "$LINT" ] || { echo "vault pre-commit: lint not available, skipping" >&2; exit 0; }
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "vault pre-commit: not inside the vault repo, skipping" >&2; exit 0; }
-"$PY" -I "$LINT" "$ROOT" >&2 || {
+"$PY" -I "$LINT" --staged "$ROOT" >&2 || {
   echo "vault pre-commit: fix the ERROR lines above, then commit again." >&2
   exit 1
 }

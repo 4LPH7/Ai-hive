@@ -8,14 +8,20 @@ The live agent is the Generator and Reflector (skill `hive-ace`); this file is t
     python ace.py show <scope> ["task"]      bullets hive_context would inject
     python ace.py hook-start                 SessionStart hook: inject top bullets (stdin = hook JSON)
     python ace.py hook-stop                  Stop hook: ask the agent to reflect after enough work
-scope = "global" or a project slug (folder under D:\\PROJECTS, lowercased, spaces to hyphens).
+scope = "global" or a project slug (folder under projects root, lowercased, spaces to hyphens).
 """
+import datetime
 import json
 import os
 import re
+import socket
 import sys
 import time
+import uuid
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hive
 
 VAULT = Path(os.environ.get("HIVE_VAULT", r"D:\Valut\OBS"))
 PROJECTS = Path(os.environ.get("HIVE_PROJECTS", r"D:\PROJECTS"))
@@ -23,7 +29,7 @@ STATE_PATH = Path(os.environ.get("HIVE_ACE_STATE") or Path(
     os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or os.getcwd()) / "hive" / "ace-state.json")
 
 SECTIONS = {"strategies": "str", "pitfalls": "pit", "commands": "cmd", "conventions": "con"}
-LINE_RE = re.compile(r"^- \[([a-z]{3}-\d{5})\] helpful=(\d+) harmful=(\d+) :: (.+)$")
+LINE_RE = re.compile(r"^- \[([a-z]{3}-\d{5})\] (?:seen=(\d+)\s+)?(?:updated=(\d{4}-\d{2}-\d{2})\s+)?helpful=(\d+)\s+harmful=(\d+)\s+::\s+(.+)$")
 MAX_BULLET_CHARS = 300
 MAX_ADDS_PER_APPLY = 5      # a noisy reflection cannot flood the playbook
 MAX_BULLETS = 80            # grow-and-refine cap per playbook
@@ -35,6 +41,122 @@ EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 SECRET_RE = re.compile(
     r"(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY|(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,})", re.I)
+
+
+def scrub_secrets(text):
+    return SECRET_RE.sub("[REDACTED_SECRET]", text)
+
+
+def is_pid_alive(pid):
+    """Check if process with PID is alive (Windows & POSIX)."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        SYNCHRONIZE = 0x00100000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+
+
+class PlaybookLock:
+    """Atomic file lock with PID:hostname:timestamp:nonce and 30s stale-steal."""
+
+    def __init__(self, path, timeout=30.0):
+        self.lock_path = Path(path).with_suffix(".lock")
+        self.timeout = timeout
+        self.fd = None
+        self.hostname = socket.gethostname()
+
+    def acquire(self):
+        start = time.time()
+        nonce = uuid.uuid4().hex[:8]
+        payload = f"{os.getpid()}:{self.hostname}:{datetime.datetime.now(datetime.timezone.utc).isoformat()}:{nonce}\n"
+        while True:
+            try:
+                self.fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                try:
+                    os.write(self.fd, payload.encode("utf-8"))
+                except BaseException:
+                    os.close(self.fd)
+                    self.fd = None
+                    try:
+                        self.lock_path.unlink()
+                    except OSError:
+                        pass
+                    raise
+                return self
+            except FileExistsError:
+                pass
+            except OSError:
+                time.sleep(0.01)
+                continue
+
+            elapsed = time.time() - start
+            if elapsed > self.timeout:
+                raise TimeoutError(f"could not acquire playbook lock after {self.timeout}s: held by {self.lock_path}")
+
+            # Only inspect lock details after a brief wait
+            if elapsed > 0.5:
+                content = ""
+                try:
+                    content = self.lock_path.read_text(encoding="utf-8").strip()
+                    parts = content.split(":")
+                    lock_pid = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else -1
+                    lock_host = parts[1] if len(parts) > 1 else ""
+                except (OSError, ValueError):
+                    lock_pid, lock_host = -1, ""
+
+                is_stale = False
+                if lock_host == self.hostname and lock_pid > 0 and not is_pid_alive(lock_pid):
+                    is_stale = True
+
+                try:
+                    age = time.time() - self.lock_path.stat().st_mtime
+                except OSError:
+                    age = 0.0
+
+                if is_stale or age > self.timeout:
+                    if lock_host != self.hostname and not is_stale:
+                        raise TimeoutError(f"playbook locked by foreign host {lock_host} (age {age:.1f}s)")
+                    try:
+                        self.lock_path.unlink()
+                    except OSError:
+                        pass
+                    continue
+
+            time.sleep(0.02)
+
+    def release(self):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+        for _ in range(100):
+            try:
+                if not self.lock_path.exists():
+                    break
+                self.lock_path.unlink()
+                break
+            except OSError:
+                time.sleep(0.01)
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
 
 
 def slugify(name):
@@ -60,7 +182,7 @@ def scope_for_cwd(cwd):
 # ---------------------------------------------------------------- playbook file
 
 def parse(text):
-    """-> {section: [bullet]}; bullet = {id, helpful, harmful, content}. Unknown lines are dropped:
+    """-> {section: [bullet]}; bullet = {id, seen, helpful, harmful, content}. Unknown lines are dropped:
     the playbook is machine-managed."""
     sections, current = {name: [] for name in SECTIONS}, None
     for line in text.splitlines():
@@ -70,21 +192,35 @@ def parse(text):
             continue
         m = LINE_RE.match(line.strip())
         if m and current:
-            sections[current].append({"id": m.group(1), "helpful": int(m.group(2)),
-                                      "harmful": int(m.group(3)), "content": m.group(4).strip()})
+            helpful = int(m.group(4))
+            harmful = int(m.group(5))
+            seen = int(m.group(2)) if m.group(2) is not None else (helpful + harmful)
+            bullet = {
+                "id": m.group(1),
+                "seen": seen,
+                "helpful": helpful,
+                "harmful": harmful,
+                "content": m.group(6).strip(),
+            }
+            if m.group(3):
+                bullet["updated"] = m.group(3)
+            sections[current].append(bullet)
     return sections
 
 
 def render(scope, sections, today):
     head = (f"---\ntype: note\nproject: {'all' if scope == 'global' else scope}\nagent: claude\n"
             f"status: active\nupdated: {today}\n---\n# Playbook: {scope}\n\n"
-            "> ACE playbook. Changed only by `python D:\\PROJECTS\\ai-hive\\ace.py apply` (skill `hive-ace`).\n"
+            "> ACE playbook. Changed only by `hive ace apply` (skill `hive-ace`).\n"
             "> Do not hand-edit: delta merges keep counters and prevent context collapse.\n")
     body = []
     for name in SECTIONS:
         body.append(f"\n## {name}\n")
-        body += [f"- [{b['id']}] helpful={b['helpful']} harmful={b['harmful']} :: {b['content']}"
-                 for b in sections[name]]
+        lines = []
+        for b in sections[name]:
+            up = f" updated={b['updated']}" if b.get("updated") else ""
+            lines.append(f"- [{b['id']}] seen={b.get('seen', b['helpful'] + b['harmful'])}{up} helpful={b['helpful']} harmful={b['harmful']} :: {b['content']}")
+        body += lines
     return head + "\n".join(body) + "\n"
 
 
@@ -111,12 +247,32 @@ def jaccard(a, b):
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
-def net(b):
-    return b["helpful"] - b["harmful"]
+def bullet_decay(b, today_date=None):
+    if b.get("helpful", 0) > 0:
+        return 0
+    if b.get("seen", 0) < 10:
+        return 0
+    up_str = b.get("updated")
+    if not up_str:
+        return 0
+    try:
+        t_date = today_date or datetime.date.today()
+        b_date = datetime.date.fromisoformat(up_str)
+        days = (t_date - b_date).days
+        if days > 30:
+            return max(3, (days - 30) // 10 + 1)
+    except (ValueError, TypeError):
+        pass
+    return 0
 
 
-def apply_ops(sections, ops):
+def net(b, today_date=None):
+    return b["helpful"] - b["harmful"] - bullet_decay(b, today_date)
+
+
+def apply_ops(sections, ops, today=None):
     """Pure: returns (new_sections, report). ops: [{type: ADD, section, content} | {type: TAG, id, tag}]."""
+    t_date = datetime.date.fromisoformat(today) if today else datetime.date.today()
     new = {name: [dict(b) for b in bullets] for name, bullets in sections.items()}
     by_id = {b["id"]: b for bullets in new.values() for b in bullets}
     report = {"added": [], "reinforced": [], "tagged": 0, "rejected": [], "pruned": []}
@@ -125,10 +281,27 @@ def apply_ops(sections, ops):
     for op in ops if isinstance(ops, list) else []:
         kind = str(op.get("type", "")).upper() if isinstance(op, dict) else ""
         if kind == "TAG":
-            b, tag = by_id.get(str(op.get("id"))), op.get("tag")
+            b = by_id.get(str(op.get("id")))
+            tag = op.get("tag")
+            if not tag:
+                if op.get("helpful"):
+                    tag = "helpful"
+                elif op.get("harmful"):
+                    tag = "harmful"
+            delta = op.get(tag, 1) if isinstance(op.get(tag), int) else 1
             if b and tag in ("helpful", "harmful"):
-                b[tag] += 1
+                b[tag] += delta
+                b["seen"] = max(b.get("seen", 0), b["helpful"] + b["harmful"])
                 report["tagged"] += 1
+            elif str(op.get("id", "")).startswith("skill:") and tag in ("helpful", "harmful"):
+                report["tagged"] += 1
+                try:
+                    import ledger, hive
+                    ledger_dest = os.environ.get("HIVE_LEDGER") or hive.load_config()["ledger"]
+                    skill_name = str(op.get("id"))[6:]
+                    ledger.record(ledger_dest, event="skill_feedback", project=skill_name, query=tag, hits=[], duration_ms=0.0)
+                except Exception:
+                    pass
             continue
         if kind != "ADD":
             report["rejected"].append(f"unknown op {op!r:.60}")
@@ -143,26 +316,37 @@ def apply_ops(sections, ops):
             continue
         twin = max(by_id.values(), key=lambda b: jaccard(tokens(b["content"]), tokens(content)), default=None)
         if twin and jaccard(tokens(twin["content"]), tokens(content)) >= DUP_JACCARD:
-            twin["helpful"] += 1  # same lesson again: reinforce instead of duplicating
+            twin["seen"] = twin.get("seen", twin["helpful"] + twin["harmful"]) + 1  # reinforce seen count without inflating helpful
             report["reinforced"].append(twin["id"])
             continue
-        bullet = {"id": f"{SECTIONS[section]}-{next_n:05d}", "helpful": 0, "harmful": 0, "content": content}
+        bullet = {"id": f"{SECTIONS[section]}-{next_n:05d}", "seen": 1, "helpful": 0, "harmful": 0, "content": content}
         next_n += 1
         adds += 1
         new[section].append(bullet)
         by_id[bullet["id"]] = bullet
         report["added"].append(bullet["id"])
-    for name in new:  # refine: prune bullets the evidence says hurt
-        keep = [b for b in new[name] if b["harmful"] < b["helpful"] + PRUNE_MARGIN]
+    for name in new:  # refine: prune bullets the evidence says hurt or decayed
+        keep = [b for b in new[name] if (b["harmful"] + bullet_decay(b, t_date)) < b["helpful"] + PRUNE_MARGIN]
         report["pruned"] += [b["id"] for b in new[name] if b not in keep]
         new[name] = keep
     everything = [b for bullets in new.values() for b in bullets]
     if len(everything) > MAX_BULLETS:  # over cap: drop lowest net score, oldest first
-        drop = sorted(everything, key=lambda b: (net(b), int(b["id"].split("-")[1])))[:len(everything) - MAX_BULLETS]
+        drop = sorted(everything, key=lambda b: (net(b, t_date), int(b["id"].split("-")[1])))[:len(everything) - MAX_BULLETS]
         ids = {b["id"] for b in drop}
         report["pruned"] += sorted(ids)
         new = {name: [b for b in bullets if b["id"] not in ids] for name, bullets in new.items()}
     return new, report
+
+
+def apply(scope, ops, today=None):
+    """Load, apply ops under atomic lock, save, return report."""
+    path = scope_path(scope)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with PlaybookLock(path):
+        current = load(scope)
+        new_sections, report = apply_ops(current, ops, today=today)
+        save(scope, new_sections, today=today)
+        return report
 
 
 def select(scopes, task="", limit=INJECT_LIMIT):
@@ -192,15 +376,24 @@ def read_hook_input():
         return {}
 
 
-def hook_start():
+def hook_start(scope=None):
     data = read_hook_input()
-    scope = scope_for_cwd(data.get("cwd") or os.getcwd())
-    rows = select(["global"] + ([scope] if scope != "global" else []))
+    resolved_scope = scope or scope_for_cwd(data.get("cwd") or os.getcwd())
+    rows = select(["global"] + ([resolved_scope] if resolved_scope != "global" else []))
     if not rows:
         return
     text = ("Hive playbook (ACE). Apply what fits; note the ids you relied on. "
             "After substantial work run the `hive-ace` skill to tag them and add new lessons.\n" + format_bullets(rows))
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
+    try:
+        import ledger
+        cfg = hive.load_config()
+        ledger.record(cfg["ledger"], event="inject", project=resolved_scope, query="hook-start", injected_bullets=[b["id"] for _, _, b in rows])
+    except Exception:
+        pass
+    if data:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
+    else:
+        print(text)
 
 
 def count_tools(transcript_path):
@@ -223,12 +416,20 @@ def count_tools(transcript_path):
     return tools, edits
 
 
-def hook_stop():
+def hook_stop(scope=None, *args):
     data = read_hook_input()
+    resolved_scope = scope or scope_for_cwd(data.get("cwd") or os.getcwd())
+    try:
+        import ledger
+        cfg = hive.load_config()
+        ledger.record(cfg["ledger"], event="reflect", project=resolved_scope, query="hook-stop")
+    except Exception:
+        pass
     if data.get("stop_hook_active") or os.environ.get("HIVE_ACE_DISABLE"):
         return
     session, transcript = data.get("session_id"), data.get("transcript_path")
     if not session or not transcript:
+        print(f"ace: stop hook triggered for scope '{resolved_scope}'")
         return
     tools, edits = count_tools(transcript)
     try:
@@ -241,9 +442,8 @@ def hook_stop():
     state = dict(list(state.items())[-200:])
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
-    scope = scope_for_cwd(data.get("cwd") or os.getcwd())
     print(json.dumps({"decision": "block", "reason": (
-        f"Hive ACE checkpoint ({tools} tool calls). Run the `hive-ace` skill now for scope `{scope}`: "
+        f"Hive ACE checkpoint ({tools} tool calls). Run the `hive-ace` skill now for scope `{resolved_scope}`: "
         "reflect on this session, tag playbook bullets you used, add at most 3 new lessons, apply with ace.py, "
         "then finish your previous reply unchanged. Skip if nothing reusable was learned.")}))
 
@@ -254,7 +454,7 @@ def main(argv):
     cmd, *rest = argv or ["help"]
     if cmd in ("hook-start", "hook-stop"):
         try:  # a hook must never break the session
-            (hook_start if cmd == "hook-start" else hook_stop)()
+            (hook_start if cmd == "hook-start" else hook_stop)(*rest)
         except Exception as exc:
             print(f"hive ace {cmd}: {exc!r}", file=sys.stderr)
         return 0
@@ -268,8 +468,7 @@ def main(argv):
             return 1
         ops = payload.get("operations", []) + payload.get("bullet_tags", []) if isinstance(payload, dict) else payload
         ops = [dict(o, type=o.get("type", "TAG")) for o in ops if isinstance(o, dict)]
-        sections, report = apply_ops(load(rest[0]), ops)
-        save(rest[0], sections)
+        report = apply(rest[0], ops)
         print(json.dumps(report, indent=1))
         return 0
     if cmd == "show" and rest:
@@ -281,4 +480,10 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    native = hive.find_native_binary()
+    if native and len(sys.argv) > 1 and sys.argv[1] in ("apply", "show", "hook-start", "hook-stop"):
+        import subprocess
+        cmd = sys.argv[1]
+        rust_cmd = "hook-start" if cmd == "hook-start" else "hook-stop" if cmd == "hook-stop" else cmd
+        sys.exit(subprocess.call([native, "ace", rust_cmd, *sys.argv[2:]]))
     sys.exit(main(sys.argv[1:]))

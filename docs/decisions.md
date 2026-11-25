@@ -21,6 +21,10 @@ records what was chosen, what was rejected, and the evidence.
 | `source:` required on new agent notes | Trusting agent-written claims | Self-written memory compounds errors; traceable claims can be checked and superseded |
 | No ML model for inbox triage; you triage `inbox/` | [Laya](https://huggingface.co/convaiinnovations/laya) decision model proposing project and kind (tried and removed 2026-11-23) | On real inbox notes it was wrong on both at under 30% confidence while its uncalibrated gate said `auto`; it needed 30-40+ confirmations, a 4 GB torch venv and 15-minute CPU refits to sort a handful of notes. Not worth it at this vault size |
 | Personal eval set kept out of the repo | Shipping the author's golden questions | They describe private projects; `examples/eval_golden.example.json` shows the format |
+| Standalone Rust binary as primary core with Python fallback (ADR 0004) | Pure Python only or requiring heavy C-extensions/runtimes | Sub-millisecond cold start (<1 ms), bundled SQLite FTS5 with zero external dependencies, 2-3x faster graph PageRank, while maintaining pure Python stdlib parity |
+| Supply-chain security audit gate for skills | Installing remote skills blindly | Third-party SKILL.md is executable prompt context; blocks Trojan Source (CVE-2021-42574) bidirectional Unicode, prompt injections, and shell exfiltration before writing to disk |
+| Deterministic outcome scoring & gap mining (ADR 0005) | Unsupervised LLM self-editing of playbooks | Correlates test exit codes and git diffs against sessions; rewards or penalizes only injected bullets; clusters zero-hit queries into human-reviewed proposal notes in `inbox/` |
+| OmniRoute tiered inference with inbox proposals (ADR 0006) | In-process LLM engines or uncontrolled cloud routing | Decouples model inference from storage; hard-locks private projects to localhost `hive-private`; scrubs secrets before egress; writes proposals exclusively to `inbox/` without touching canonical notes |
 
 ## Not built yet, and when it would be worth it
 
@@ -28,5 +32,3 @@ records what was chosen, what was rejected, and the evidence.
 |------|---------------|
 | Embedding search | Recall@5 on your golden set drops below about 0.9, or the vault passes a few thousand notes |
 | Symbol leases between agents | Two agents regularly edit the same repository at the same time |
-| Commit-driven staleness of notes anchored to code symbols | Notes start naming functions that have changed; graphify gives start lines but not ranges, so this needs range data first |
-| Automated inbox triage | The inbox regularly holds dozens of unsorted notes; an agent pass with `hive_search` context is cheaper to try than a trained model |
