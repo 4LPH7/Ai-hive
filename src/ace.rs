@@ -461,6 +461,15 @@ pub fn parse_delta(json_str: &str) -> Result<DeltaOps, String> {
 }
 
 pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Result<usize, String> {
+    apply_reserving(sections, ops, &std::collections::HashSet::new())
+}
+
+/// `apply`, but new ids also skip `reserved` (retired ids from the quorum sidecar are never reissued).
+pub fn apply_reserving(
+    sections: &mut HashMap<String, Vec<Bullet>>,
+    ops: &DeltaOps,
+    reserved: &std::collections::HashSet<String>,
+) -> Result<usize, String> {
     let mut changed = 0usize;
 
     // 1. Process TAG
@@ -548,8 +557,8 @@ pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Res
             // Generate new ID
             let prefix = SECTIONS.iter().find(|&&(s, _)| s == sec_name).unwrap().1;
             let mut next_num = 1;
-            for b in bullets.iter() {
-                if let Some(num_str) = b.id.strip_prefix(&format!("{}-", prefix)) {
+            for id in bullets.iter().map(|b| &b.id).chain(reserved.iter()) {
+                if let Some(num_str) = id.strip_prefix(&format!("{}-", prefix)) {
                     if let Ok(num) = num_str.parse::<usize>() {
                         if num >= next_num {
                             next_num = num + 1;
@@ -611,8 +620,31 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
     }
     let _lock = PlaybookLock::acquire(&path, std::time::Duration::from_secs(30))?;
     let mut sections = load(vault, scope)?;
-    let changed = apply(&mut sections, ops)?;
+    let ids = |s: &HashMap<String, Vec<Bullet>>| -> std::collections::HashSet<String> {
+        s.values().flatten().map(|b| b.id.clone()).collect()
+    };
+    let before = ids(&sections);
+    let meta_file = crate::quorum::meta_path(&path);
+    let meta = crate::quorum::load(&meta_file);
+    let reserved = meta.keys().cloned().collect();
+    let changed = apply_reserving(&mut sections, ops, &reserved)?;
     save(vault, scope, &sections, None)?;
+    // QUOR-01/PROV-04: state + origin sidecar, written under the same lock
+    let after = ids(&sections);
+    let mut added: Vec<String> = after.difference(&before).cloned().collect();
+    let mut pruned: Vec<String> = before.difference(&after).cloned().collect();
+    if !added.is_empty() || !pruned.is_empty() {
+        added.sort();
+        pruned.sort();
+        let next = crate::quorum::reconcile(
+            &meta,
+            &added,
+            &pruned,
+            &crate::ledger::resolve_session(None),
+            &crate::ledger::resolve_agent(None),
+        );
+        crate::quorum::save(&meta_file, &next)?;
+    }
     Ok(changed)
 }
 

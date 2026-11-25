@@ -12,5 +12,6 @@ pub mod llm;
 pub mod mcp;
 pub mod miner;
 pub mod packer;
+pub mod quorum;
 pub mod skill;
 pub mod trace;

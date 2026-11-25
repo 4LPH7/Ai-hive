@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hive
+import quorum
 
 VAULT = Path(os.environ.get("HIVE_VAULT", r"D:\Valut\OBS"))
 PROJECTS = Path(os.environ.get("HIVE_PROJECTS", r"D:\PROJECTS"))
@@ -270,13 +271,13 @@ def net(b, today_date=None):
     return b["helpful"] - b["harmful"] - bullet_decay(b, today_date)
 
 
-def apply_ops(sections, ops, today=None):
+def apply_ops(sections, ops, today=None, reserved=()):
     """Pure: returns (new_sections, report). ops: [{type: ADD, section, content} | {type: TAG, id, tag}]."""
     t_date = datetime.date.fromisoformat(today) if today else datetime.date.today()
     new = {name: [dict(b) for b in bullets] for name, bullets in sections.items()}
     by_id = {b["id"]: b for bullets in new.values() for b in bullets}
     report = {"added": [], "reinforced": [], "tagged": 0, "rejected": [], "pruned": []}
-    next_n = max((int(i.split("-")[1]) for i in by_id), default=0) + 1
+    next_n = max((int(i.split("-")[1]) for i in [*by_id, *reserved]), default=0) + 1  # retired ids never reissued
     adds = 0
     for op in ops if isinstance(ops, list) else []:
         kind = str(op.get("type", "")).upper() if isinstance(op, dict) else ""
@@ -344,8 +345,14 @@ def apply(scope, ops, today=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     with PlaybookLock(path):
         current = load(scope)
-        new_sections, report = apply_ops(current, ops, today=today)
+        meta_file = quorum.meta_path(path)
+        meta = quorum.load(meta_file)
+        new_sections, report = apply_ops(current, ops, today=today, reserved=meta.keys())
         save(scope, new_sections, today=today)
+        if report["added"] or report["pruned"]:  # QUOR-01/PROV-04: state + origin sidecar, same lock
+            import ledger
+            quorum.save(meta_file, quorum.reconcile(meta, report["added"], report["pruned"],
+                                                    ledger.resolve_session(), ledger.resolve_agent()))
     try:  # PROV-02/04: who merged which bullets, at which commit; fail-open
         import hashlib
         import ledger
