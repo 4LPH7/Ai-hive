@@ -367,9 +367,14 @@ def apply(scope, ops, today=None):
         evidence = helpful_tags(ops, live, session, agent)
         # QUOR-03: another session independently proposing the same lesson is a confirmation
         evidence += [(i, session, agent, "") for i in report["reinforced"] if i in live]
+        # QUOR-04: conflicts inside this playbook gate promotion and are reported; lines are never touched
+        pairs = quorum.conflicts([b for bullets in new_sections.values() for b in bullets])
         if report["added"] or report["pruned"] or evidence:  # QUOR-01/02, PROV-04: sidecar, same lock
-            meta = quorum.reconcile(meta, report["added"], report["pruned"], session, agent)
-            quorum.save(meta_file, quorum.add_evidence(meta, evidence))
+            base = quorum.reconcile(meta, report["added"], report["pruned"], session, agent)
+            meta = quorum.displace(base, quorum.add_evidence(base, evidence, quorum.gates(base, pairs)), pairs)
+            quorum.save(meta_file, meta)
+        quorum.write_report(VAULT / "_meta" / "_conflicts.md", slugify(scope), pairs, meta,
+                            today or time.strftime("%Y-%m-%d"))
     try:  # PROV-02/04: who merged which bullets, at which commit; fail-open
         import hashlib
         import ledger

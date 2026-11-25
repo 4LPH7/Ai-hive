@@ -1,0 +1,17 @@
+{
+  "bullets": [
+    {"id": "pit-00001", "content": "cargo build --release fails with Access is denied on target/release/hive.exe while MCP servers run; use cargo check until sessions close."},
+    {"id": "cmd-00002", "content": "When hive.exe is locked, rebuild anyway: rename target/release/hive.exe and run cargo build --release; old sessions keep the old binary."},
+    {"id": "str-00003", "content": "Compute the parity sha with `ctx_execute` and pin it in a Rust test."},
+    {"id": "cmd-00004", "content": "The shell blocks python -c; never inline code, use `ctx_execute` or a script file."},
+    {"id": "pit-00005", "content": "Never name a module trace.py or json.py; hive uses traces.py."},
+    {"id": "str-00006", "content": "Keep traces.py and trace.py names distinct in hive imports."},
+    {"id": "pit-00007", "content": "Do not edit src/ace.rs parse rules or ace.py LINE_RE inline; older readers drop unknown lines."},
+    {"id": "str-00008", "content": "Extend src/ace.rs parse and ace.py LINE_RE together so both readers stay in sync."}
+  ],
+  "expected": [
+    ["pit-00001", "cmd-00002", ["--release", "target/release/hive.exe"]],
+    ["pit-00005", "str-00006", ["trace.py", "traces.py"]],
+    ["pit-00007", "str-00008", ["ace.py", "src/ace.rs"]]
+  ]
+}

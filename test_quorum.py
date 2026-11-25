@@ -151,6 +151,67 @@ class QuorumPromotionTest(QuorumSidecarTest):
         rec = self.meta()[bid]
         self.assertEqual((rec["state"], quorum.score(rec), quorum.sessions(rec)), ("scout", 0.35, {"sess-a"}))
 
+FIXTURE = Path(__file__).resolve().parent / "tests" / "fixtures" / "conflicts.json"
+
+
+class QuorumConflictTest(QuorumSidecarTest):
+    """QUOR-04: opposite-polarity bullets sharing >= 2 anchors are both kept and listed; a challenger needs
+    max(1.5, incumbent + 1.0) to displace a canonical incumbent, which drops to quorum (hidden, reversible)."""
+
+    def test_detector_matches_shared_fixture(self):
+        import json
+        fx = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        self.assertEqual([list(c[:2]) + [list(c[2])] for c in quorum.conflicts(fx["bullets"])], fx["expected"])
+
+    def test_challenger_needs_incumbent_plus_one_and_report_lists_both(self):
+        import lint
+        path = ace.scope_path("demo")
+        path.parent.mkdir(parents=True)
+        path.write_text("## pitfalls\n- [pit-00001] seen=3 helpful=3 harmful=0 :: cargo build --release fails with "
+                        "Access is denied on target/release/hive.exe; use cargo check until sessions close.\n",
+                        encoding="utf-8")
+        ch_text = "rebuild anyway: rename target/release/hive.exe, then cargo build --release"
+        (ch,) = ace.apply("demo", [{"type": "ADD", "section": "commands", "content": ch_text}])["added"]
+        ace.apply("demo", [{"type": "TAG", "id": ch, "tag": "helpful", "session": "sess-a", "evidence": "test_pass"}])
+        ace.apply("demo", [{"type": "TAG", "id": ch, "tag": "helpful", "session": "sess-b"}])
+        m = self.meta()
+        self.assertEqual((quorum.score(m[ch]), quorum.state_of(m, ch), quorum.state_of(m, "pit-00001")),
+                         (2.0, "quorum", "canonical"), "2.0 < incumbent floor 1.5 + 1.0: held")
+        report = self.vault / "_meta" / "_conflicts.md"
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("## demo", text)
+        self.assertIn("`pit-00001` (canonical", text)
+        self.assertIn(f"`{ch}` (quorum", text)
+        self.assertNotIn("rebuild anyway", text, "report lists ids and anchors, never lesson text")
+        mtime = report.stat().st_mtime_ns
+        ace.apply("demo", [{"type": "TAG", "id": "pit-00001", "tag": "helpful", "session": "sess-a"}])
+        ace.apply("demo", [{"type": "TAG", "id": ch, "tag": "helpful", "session": "sess-c"}])
+        m = self.meta()
+        self.assertEqual((quorum.state_of(m, ch), quorum.state_of(m, "pit-00001")), ("canonical", "quorum"))
+        self.assertIn("pit-00001", (self.vault / "projects" / "demo" / "playbook.md").read_text(encoding="utf-8"),
+                      "displacement never touches playbook lines")
+        self.assertNotEqual(report.stat().st_mtime_ns, mtime)
+        errors = [f for f in lint.lint(self.vault, files=["_meta/_conflicts.md"]) if f.severity == "ERROR"]
+        self.assertEqual(errors, [])
+
+    def test_report_written_only_on_change_and_removed_when_empty(self):
+        report = self.vault / "_meta" / "_conflicts.md"
+        quorum.write_report(report, "demo", [], {}, "2026-11-25")
+        self.assertFalse(report.exists(), "never written when there are no conflicts")
+        quorum.write_report(report, "demo", [("pit-00001", "cmd-00002", ["a.rs", "b.rs"])], {}, "2026-11-25")
+        first = report.read_text(encoding="utf-8")
+        quorum.write_report(report, "other", [("pit-00009", "cmd-00010", ["x.py", "y.py"])], {}, "2026-11-26")
+        both = report.read_text(encoding="utf-8")
+        self.assertIn("## demo", both)
+        self.assertIn("## other", both)
+        mtime = report.stat().st_mtime_ns
+        quorum.write_report(report, "other", [("pit-00009", "cmd-00010", ["x.py", "y.py"])], {}, "2026-11-27")
+        self.assertEqual(report.stat().st_mtime_ns, mtime, "unchanged content is not rewritten")
+        quorum.write_report(report, "demo", [], {}, "2026-11-27")
+        quorum.write_report(report, "other", [], {}, "2026-11-27")
+        self.assertFalse(report.exists())
+        self.assertIn("type: note", first)
+
 
 if __name__ == "__main__":
     unittest.main()

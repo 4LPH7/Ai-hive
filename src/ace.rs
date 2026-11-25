@@ -683,12 +683,33 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
                 }),
         )
         .collect();
+    // QUOR-04: conflicts inside this playbook gate promotion and are reported; lines are never touched
+    let bullets: Vec<(String, String)> = sections
+        .values()
+        .flatten()
+        .map(|b| (b.id.clone(), b.content.clone()))
+        .collect();
+    let pairs = crate::quorum::conflicts(&bullets);
+    let mut meta = meta;
     if !added.is_empty() || !pruned.is_empty() || !evidence.is_empty() {
         added.sort();
         pruned.sort();
-        let next = crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent);
-        crate::quorum::save(&meta_file, &crate::quorum::add_evidence(&next, &evidence))?;
+        let base = crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent);
+        let gates = crate::quorum::gates(&base, &pairs);
+        meta = crate::quorum::displace(
+            &base,
+            &crate::quorum::add_evidence(&base, &evidence, &gates),
+            &pairs,
+        );
+        crate::quorum::save(&meta_file, &meta)?;
     }
+    crate::quorum::write_report(
+        &vault.join("_meta").join("_conflicts.md"),
+        &crate::common::slugify(scope),
+        &pairs,
+        &meta,
+        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+    )?;
     Ok(changed)
 }
 

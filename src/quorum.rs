@@ -19,12 +19,13 @@ pub const PROMOTE_SESSIONS: usize = 2;
 pub const INJECT_QUORUM_ENV: &str = "HIVE_INJECT_QUORUM";
 pub const ANONYMOUS: &str = "anonymous";
 
-/// Never demotes; retired and canonical stay.
-pub fn promote(rec: &mut Meta) {
+/// scout -> quorum (>= 2 sessions) -> canonical (and score >= gate: 1.5 unless a QUOR-04 conflict raises it).
+/// Never demotes here; retired and canonical stay.
+pub fn promote(rec: &mut Meta, gate: f64) {
     if !matches!(rec.state.as_str(), "scout" | "quorum") || sessions(rec).len() < PROMOTE_SESSIONS {
         return;
     }
-    rec.state = if score(rec) >= PROMOTE_SCORE {
+    rec.state = if score(rec) >= gate {
         "canonical"
     } else {
         "quorum"
@@ -161,7 +162,7 @@ pub fn reconcile(
 
 /// QUOR-02: record helpful tags. `test_pass` keeps its kind; otherwise the origin session tagging its own
 /// bullet is `self_tag`, any other session `confirm`. A (session, kind) pair is recorded once.
-pub fn add_evidence(meta: &MetaMap, tags: &[Tag]) -> MetaMap {
+pub fn add_evidence(meta: &MetaMap, tags: &[Tag], gates: &BTreeMap<String, f64>) -> MetaMap {
     let mut out = meta.clone();
     for t in tags {
         let rec = out
@@ -195,7 +196,7 @@ pub fn add_evidence(meta: &MetaMap, tags: &[Tag]) -> MetaMap {
                 kind: kind.into(),
             });
         }
-        promote(rec);
+        promote(rec, *gates.get(&t.id).unwrap_or(&PROMOTE_SCORE));
     }
     out
 }
@@ -213,7 +214,185 @@ pub fn score(rec: &Meta) -> f64 {
             *slot = slot.max(w);
         }
     }
-    (best.values().sum::<f64>() * 1e6).round() / 1e6
+    // `+ 0.0` turns the -0.0 an empty f64 sum yields into 0.0, so reports print "0" like Python
+    (best.values().sum::<f64>() * 1e6).round() / 1e6 + 0.0
+}
+
+// ---------------------------------------------------------------- QUOR-04 conflicts
+// Heuristic on purpose: a false positive only holds a promotion and adds a report line; playbook lines are
+// never touched. Anchors are paths, `backticked` spans, --flags and snake_case identifiers. Mirror of quorum.py.
+const ANCHOR_RE: &str = r"`([^`]+)`|((?:[\w.-]+[/\\])+[\w.-]+|[\w-]+\.(?:rs|py|md|exe|json|jsonl|toml|sqlite|ps1|ts|js))|(--[\w-]+)|(\b[a-z]+_[a-z_]+\b)";
+const NEGATIVE_RE: &str =
+    r"(?i)\b(never|don'?t|do not|avoid|instead of|until|fails?|cannot|can'?t|blocks?|denied)\b";
+/// One shared generic anchor (a tool name) is not a conflict: real-playbook calibration.
+pub const MIN_SHARED_ANCHORS: usize = 2;
+pub const CHALLENGE_MARGIN: f64 = 1.0;
+
+pub fn anchors(text: &str) -> std::collections::BTreeSet<String> {
+    let re = regex::Regex::new(ANCHOR_RE).unwrap();
+    re.captures_iter(text)
+        .filter_map(|c| (1..=4).find_map(|i| c.get(i)))
+        .map(|m| {
+            m.as_str()
+                .to_lowercase()
+                .trim_matches(|ch| ".,;:".contains(ch))
+                .to_string()
+        })
+        .collect()
+}
+
+/// (a_id, b_id, sorted shared anchors) for opposite-polarity pairs in one playbook, ordered by id number.
+pub type Conflict = (String, String, Vec<String>);
+
+pub fn conflicts(bullets: &[(String, String)]) -> Vec<Conflict> {
+    let neg = regex::Regex::new(NEGATIVE_RE).unwrap();
+    let num = |id: &str| {
+        id.rsplit('-')
+            .next()
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    let mut ordered: Vec<&(String, String)> = bullets.iter().collect();
+    ordered.sort_by(|a, b| (num(&a.0), &a.0).cmp(&(num(&b.0), &b.0)));
+    let rows: Vec<_> = ordered
+        .iter()
+        .map(|(id, c)| (id.clone(), anchors(c), neg.is_match(c)))
+        .collect();
+    let mut out = Vec::new();
+    for (i, (a, aa, an)) in rows.iter().enumerate() {
+        for (b, ba, bn) in &rows[i + 1..] {
+            let shared: Vec<String> = aa.intersection(ba).cloned().collect();
+            if an != bn && shared.len() >= MIN_SHARED_ANCHORS {
+                out.push((a.clone(), b.clone(), shared));
+            }
+        }
+    }
+    out
+}
+
+fn entry(meta: &MetaMap, id: &str) -> Meta {
+    meta.get(id).cloned().unwrap_or_else(|| Meta::legacy(id))
+}
+
+/// {challenger: threshold}: a non-canonical bullet contesting a canonical one needs max(1.5, incumbent + 1.0);
+/// a canonical incumbent counts at least 1.5 (legacy bullets carry no evidence).
+pub fn gates(meta: &MetaMap, pairs: &[Conflict]) -> BTreeMap<String, f64> {
+    let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    for (a, b, _) in pairs {
+        for (inc, ch) in [(a, b), (b, a)] {
+            if state_of(meta, inc) == "canonical"
+                && matches!(state_of(meta, ch), "scout" | "quorum")
+            {
+                let need = PROMOTE_SCORE
+                    .max(score(&entry(meta, inc)).max(PROMOTE_SCORE) + CHALLENGE_MARGIN);
+                let slot = out.entry(ch.clone()).or_insert(PROMOTE_SCORE);
+                *slot = slot.max(need);
+            }
+        }
+    }
+    out
+}
+
+/// A challenger that just became canonical sends its canonical rival to quorum: hidden, kept, and able to
+/// win back under the same rule.
+pub fn displace(before: &MetaMap, after: &MetaMap, pairs: &[Conflict]) -> MetaMap {
+    let mut out = after.clone();
+    for (a, b, _) in pairs {
+        for (inc, ch) in [(a, b), (b, a)] {
+            let won = state_of(before, ch) != "canonical" && state_of(&out, ch) == "canonical";
+            if won && state_of(&out, inc) == "canonical" {
+                let mut m = entry(&out, inc);
+                m.state = "quorum".into();
+                out.insert(inc.clone(), m);
+            }
+        }
+    }
+    out
+}
+
+fn fmt_one(meta: &MetaMap, id: &str) -> String {
+    format!(
+        "`{id}` ({}, {})",
+        state_of(meta, id),
+        score(&entry(meta, id))
+    )
+}
+
+/// One `## <scope>` section per playbook in _meta/_conflicts.md: ids, states, scores and anchors, no lesson
+/// text. Atomic, rewritten only when the body changes, removed when empty. Byte-identical to quorum.py.
+pub fn write_report(
+    path: &Path,
+    scope: &str,
+    pairs: &[Conflict],
+    meta: &MetaMap,
+    today: &str,
+) -> Result<(), String> {
+    let mut sections: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if let Ok(text) = std::fs::read_to_string(path) {
+        let body = text.split_once("\n---\n").map(|(_, b)| b).unwrap_or(&text);
+        let mut current: Option<String> = None;
+        for line in body.lines() {
+            if let Some(name) = line.strip_prefix("## ") {
+                let name = name.trim().to_string();
+                sections.entry(name.clone()).or_default();
+                current = Some(name);
+            } else if let (Some(c), true) = (&current, line.starts_with("- ")) {
+                sections.get_mut(c).unwrap().push(line.to_string());
+            }
+        }
+    }
+    let old = sections.clone();
+    let lines: Vec<String> = pairs
+        .iter()
+        .map(|(a, b, s)| {
+            format!(
+                "- {} vs {}: {}",
+                fmt_one(meta, a),
+                fmt_one(meta, b),
+                s.join(", ")
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        sections.remove(scope);
+    } else {
+        sections.insert(scope.to_string(), lines);
+    }
+    if sections == old {
+        return Ok(());
+    }
+    if sections.is_empty() {
+        let _ = std::fs::remove_file(path);
+        return Ok(());
+    }
+    let mut out: Vec<String> = [
+        "---",
+        "type: note",
+        "project: all",
+        "agent: claude",
+        "status: active",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    out.push(format!("updated: {today}"));
+    out.push("source: hive ace apply (QUOR-04 conflict detector)".into());
+    out.push("---".into());
+    out.push("# Playbook conflicts".into());
+    out.push(String::new());
+    out.push("> Generated by `hive ace apply` (QUOR-04). Opposite-polarity bullets sharing anchors; both are kept.".into());
+    out.push("> A challenger needs incumbent score + 1.0 (incumbent counts at least 1.5) to displace it.".into());
+    for (name, ls) in &sections {
+        out.push(String::new());
+        out.push(format!("## {name}"));
+        out.extend(ls.iter().cloned());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, out.join("\n") + "\n").map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -255,6 +434,7 @@ mod tests {
                     agent: "claude".into(),
                     hint: hint.into(),
                 }],
+                &BTreeMap::new(),
             )
         };
         let m = tag(&meta, "sa", "");
@@ -331,6 +511,73 @@ mod tests {
         let m = load(&mf);
         assert_eq!(m.len(), 2, "second ADD got a fresh id: {m:?}");
         let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn test_conflicts_match_shared_fixture() {
+        let fx: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/conflicts.json")).unwrap();
+        let bullets: Vec<(String, String)> = fx["bullets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev() // input order must not matter
+            .map(|b| {
+                (
+                    b["id"].as_str().unwrap().into(),
+                    b["content"].as_str().unwrap().into(),
+                )
+            })
+            .collect();
+        let got: Vec<serde_json::Value> = conflicts(&bullets)
+            .into_iter()
+            .map(|(a, b, s)| serde_json::json!([a, b, s]))
+            .collect();
+        assert_eq!(serde_json::Value::Array(got), fx["expected"]);
+    }
+
+    #[test]
+    fn test_challenger_needs_incumbent_plus_one_then_displaces() {
+        let pairs = vec![(
+            "pit-00001".to_string(),
+            "cmd-00002".to_string(),
+            vec!["a".to_string(), "b".to_string()],
+        )];
+        let meta = reconcile(&MetaMap::new(), &["cmd-00002".into()], &[], "sa", "claude");
+        let t = |s: &str, hint: &str| Tag {
+            id: "cmd-00002".into(),
+            session: s.into(),
+            agent: "c".into(),
+            hint: hint.into(),
+        };
+        let g = gates(&meta, &pairs);
+        assert_eq!(
+            g["cmd-00002"], 2.5,
+            "legacy canonical incumbent floored at 1.5, plus 1.0"
+        );
+        let m = add_evidence(&meta, &[t("sa", "test_pass"), t("sb", "")], &g);
+        let m = displace(&meta, &m, &pairs);
+        assert_eq!(
+            (state_of(&m, "cmd-00002"), state_of(&m, "pit-00001")),
+            ("quorum", "canonical")
+        );
+        let m2 = add_evidence(&m, &[t("sc", "")], &gates(&m, &pairs));
+        let m2 = displace(&m, &m2, &pairs);
+        assert_eq!(
+            (state_of(&m2, "cmd-00002"), state_of(&m2, "pit-00001")),
+            ("canonical", "quorum")
+        );
+        let dir = std::env::temp_dir().join(format!("hive-conflicts-{}", std::process::id()));
+        let p = dir.join("_conflicts.md");
+        write_report(&p, "demo", &pairs, &m2, "2026-11-25").unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            text.contains("- `pit-00001` (quorum, 0) vs `cmd-00002` (canonical, 3): a, b"),
+            "{text}"
+        );
+        write_report(&p, "demo", &[], &m2, "2026-11-25").unwrap();
+        assert!(!p.exists(), "removed when no conflicts are left");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
