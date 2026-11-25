@@ -4,6 +4,8 @@ Agents leave short decaying signals in the disposable hive.sqlite: strength halv
 traces under MIN_STRENGTH are hidden, rows older than 7 days are purged. Canonical Markdown is never touched.
 (Named traces.py: `trace` is a stdlib module.)
 """
+import json
+import os
 import re
 
 import ace
@@ -80,6 +82,7 @@ def active(db, project, now):
 
 
 CONTEXT_MAX_TRACES = 5
+HOT_FILE_MIN_FAILS = 3
 
 
 def _words(s):
@@ -92,3 +95,43 @@ def context_section(items, task):
     lines = [f"- {t['kind']} {t['target']} ({t['agent']}, w={w:.2f}): {t['summary']}"
              for t, w in items if not want or _words(f"{t['target']} {t['summary']}") & want][:CONTEXT_MAX_TRACES]
     return "## live traces (decaying signals from other agents)\n" + "\n".join(lines) if lines else ""
+
+
+def _tool_items(fh):
+    """Yield tool_use / tool_result dicts from transcript lines; skips malformed lines."""
+    for line in fh:
+        if '"tool_' not in line:
+            continue
+        try:
+            content = json.loads(line).get("message", {}).get("content", [])
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        yield from (i for i in content if isinstance(i, dict)) if isinstance(content, list) else ()
+
+
+def failed_files(transcript_path):
+    """{file: errored tool calls} from a Claude transcript (tool_use input path + tool_result is_error)."""
+    paths, fails = {}, {}
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as fh:
+            for item in _tool_items(fh):
+                inp = item.get("input")
+                if item.get("type") == "tool_use" and isinstance(inp, dict):
+                    path = inp.get("file_path") or inp.get("path")
+                    if isinstance(path, str) and path:
+                        paths[item.get("id")] = os.path.normcase(os.path.normpath(path))
+                elif (item.get("type") == "tool_result" and item.get("is_error") and item.get("tool_use_id") in paths
+                      and "PreToolUse:" not in str(item.get("content"))[:300]):  # hook gate denials are not failures
+                    path = paths[item["tool_use_id"]]
+                    fails[path] = fails.get(path, 0) + 1
+    except OSError:
+        return {}
+    return fails
+
+
+def emit_hot_files(db, project, transcript_path, agent, session_id, now):
+    """TRACE-05: HOT_FILE for each file with >= HOT_FILE_MIN_FAILS errored calls; returns emitted targets."""
+    hot = [(p, n) for p, n in failed_files(transcript_path).items() if n >= HOT_FILE_MIN_FAILS]
+    for path, n in hot:
+        add(db, project, "HOT_FILE", path, f"{n} failed tool calls in one session", agent, session_id, now)
+    return [p for p, _ in hot]

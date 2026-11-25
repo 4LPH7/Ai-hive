@@ -1,4 +1,5 @@
 """TRACE-01/02 parity with src/trace.rs tests."""
+import os
 import sqlite3
 import unittest
 
@@ -60,6 +61,36 @@ class ContextSectionTest(unittest.TestCase):
         self.assertEqual(traces.context_section(items, "unrelated words only"), "")
         self.assertEqual(traces.context_section([], ""), "")
         db.close()
+
+
+class HotFileEmitTest(unittest.TestCase):
+    """TRACE-05: >= 3 errored tool calls on one file in a session -> HOT_FILE."""
+
+    def test_emits_only_for_files_at_threshold(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        lines = []
+        for i, (path, err) in enumerate([("src/a.rs", True)] * 3 + [("src/b.rs", True)] * 2 + [("src/c.rs", False)] * 4):
+            lines.append({"message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": "Edit",
+                                                   "input": {"file_path": path}}]}})
+            lines.append({"message": {"content": [{"type": "tool_result", "tool_use_id": f"t{i}", "is_error": err,
+                                                   "content": "boom"}]}})
+        with tempfile.TemporaryDirectory() as tmp:
+            tr = Path(tmp) / "t.jsonl"
+            lines.append({"message": {"content": [{"type": "tool_use", "id": "g", "name": "Edit",
+                                                   "input": {"file_path": "src/b.rs"}}]}})
+            lines.append({"message": {"content": [{"type": "tool_result", "tool_use_id": "g", "is_error": True,
+                                                   "content": "PreToolUse:Write hook error: gate"}]}})
+            tr.write_text("\n".join(json.dumps(x) for x in lines) + "\nnot json\n", encoding="utf-8")
+            a, b = (os.path.normcase(os.path.normpath(p)) for p in ("src/a.rs", "src/b.rs"))
+            self.assertEqual(traces.failed_files(tr), {a: 3, b: 2})
+            db = sqlite3.connect(":memory:")
+            self.assertEqual(traces.emit_hot_files(db, "demo", tr, "claude", "s1", 0), [a])
+            (t, _), = traces.active(db, "demo", 0)
+            self.assertEqual((t["kind"], t["target"]), ("HOT_FILE", a))
+            self.assertEqual(traces.failed_files(Path(tmp) / "missing.jsonl"), {})
+            db.close()
 
 
 class TraceCliFallbackTest(unittest.TestCase):

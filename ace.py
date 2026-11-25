@@ -433,6 +433,22 @@ def count_tools(transcript_path):
     return tools, edits
 
 
+def emit_hot_files(scope, transcript, session):
+    """TRACE-05: leave HOT_FILE traces for files this session keeps failing on; fail-open."""
+    try:
+        import sqlite3
+        import time
+        import traces
+        db = sqlite3.connect(str(hive.load_config()["db"]), timeout=10)
+        try:
+            with db:
+                traces.emit_hot_files(db, scope, transcript, "claude", session, int(time.time()))
+        finally:
+            db.close()
+    except Exception as exc:  # a hook must never break the session
+        print(f"ace: hot-file traces skipped: {exc!r}", file=sys.stderr)
+
+
 def hook_stop(scope=None, *args):
     data = read_hook_input()
     resolved_scope = scope or scope_for_cwd(data.get("cwd") or os.getcwd())
@@ -448,6 +464,7 @@ def hook_stop(scope=None, *args):
     if not session or not transcript:
         print(f"ace: stop hook triggered for scope '{resolved_scope}'")
         return
+    emit_hot_files(resolved_scope, transcript, session)
     tools, edits = count_tools(transcript)
     try:
         state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
