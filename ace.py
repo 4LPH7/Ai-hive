@@ -433,7 +433,7 @@ def count_tools(transcript_path):
     return tools, edits
 
 
-def emit_hot_files(scope, transcript, session):
+def emit_hot_files(transcript, session):
     """TRACE-05: leave HOT_FILE traces for files this session keeps failing on; fail-open."""
     try:
         import sqlite3
@@ -442,7 +442,7 @@ def emit_hot_files(scope, transcript, session):
         db = sqlite3.connect(str(hive.load_config()["db"]), timeout=10)
         try:
             with db:
-                traces.emit_hot_files(db, scope, transcript, "claude", session, int(time.time()))
+                traces.emit_hot_files(db, transcript, "claude", session, int(time.time()))
         finally:
             db.close()
     except Exception as exc:  # a hook must never break the session
@@ -464,7 +464,7 @@ def hook_stop(scope=None, *args):
     if not session or not transcript:
         print(f"ace: stop hook triggered for scope '{resolved_scope}'")
         return
-    emit_hot_files(resolved_scope, transcript, session)
+    emit_hot_files(transcript, session)  # each file is filed under its own project, not the cwd scope
     tools, edits = count_tools(transcript)
     try:
         state = json.loads(STATE_PATH.read_text(encoding="utf-8"))

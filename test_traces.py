@@ -66,29 +66,39 @@ class ContextSectionTest(unittest.TestCase):
 class HotFileEmitTest(unittest.TestCase):
     """TRACE-05: >= 3 errored tool calls on one file in a session -> HOT_FILE."""
 
-    def test_emits_only_for_files_at_threshold(self):
+    def test_emits_only_for_files_at_threshold_under_the_files_own_project(self):
         import json
         import tempfile
         from pathlib import Path
-        lines = []
-        for i, (path, err) in enumerate([("src/a.rs", True)] * 3 + [("src/b.rs", True)] * 2 + [("src/c.rs", False)] * 4):
-            lines.append({"message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": "Edit",
-                                                   "input": {"file_path": path}}]}})
-            lines.append({"message": {"content": [{"type": "tool_result", "tool_use_id": f"t{i}", "is_error": err,
-                                                   "content": "boom"}]}})
+        from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
-            tr = Path(tmp) / "t.jsonl"
+            root = Path(tmp) / "PROJECTS"
+            a = str(root / "Demo App" / "src" / "a.rs")
+            b = str(root / "Demo App" / "src" / "b.rs")
+            outside = str(Path(tmp) / "vault" / "AGENTS.md")
+            calls = [(a, True), (a.lower(), True), (a, True), (b, True), (b, True), (b, False)] + [(outside, True)] * 3
+            lines = []
+            for i, (path, err) in enumerate(calls):
+                lines.append({"message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": "Edit",
+                                                       "input": {"file_path": path}}]}})
+                lines.append({"message": {"content": [{"type": "tool_result", "tool_use_id": f"t{i}", "is_error": err,
+                                                       "content": "boom"}]}})
             lines.append({"message": {"content": [{"type": "tool_use", "id": "g", "name": "Edit",
-                                                   "input": {"file_path": "src/b.rs"}}]}})
+                                                   "input": {"file_path": b}}]}})
             lines.append({"message": {"content": [{"type": "tool_result", "tool_use_id": "g", "is_error": True,
                                                    "content": "PreToolUse:Write hook error: gate"}]}})
+            tr = Path(tmp) / "t.jsonl"
             tr.write_text("\n".join(json.dumps(x) for x in lines) + "\nnot json\n", encoding="utf-8")
-            a, b = (os.path.normcase(os.path.normpath(p)) for p in ("src/a.rs", "src/b.rs"))
-            self.assertEqual(traces.failed_files(tr), {a: 3, b: 2})
+            norm = lambda p: os.path.normcase(os.path.normpath(p))
+            self.assertEqual(traces.failed_files(tr), {norm(a): 3, norm(b): 2, norm(outside): 3})
             db = sqlite3.connect(":memory:")
-            self.assertEqual(traces.emit_hot_files(db, "demo", tr, "claude", "s1", 0), [a])
-            (t, _), = traces.active(db, "demo", 0)
-            self.assertEqual((t["kind"], t["target"]), ("HOT_FILE", a))
+            with mock.patch.object(traces.ace, "PROJECTS", root):
+                self.assertEqual(traces.project_of(a.lower()), ("demo-app", "src/a.rs"))
+                self.assertIsNone(traces.project_of(outside))
+                self.assertEqual(traces.emit_hot_files(db, tr, "claude", "s1", 0), [("demo-app", "src/a.rs")])
+            (t, _), = traces.active(db, "demo-app", 0)
+            self.assertEqual((t["kind"], t["target"]), ("HOT_FILE", "src/a.rs"))
+            self.assertEqual(traces.active(db, "global", 0), [])
             self.assertEqual(traces.failed_files(Path(tmp) / "missing.jsonl"), {})
             db.close()
 

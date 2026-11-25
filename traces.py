@@ -131,9 +131,27 @@ def failed_files(transcript_path):
     return fails
 
 
-def emit_hot_files(db, project, transcript_path, agent, session_id, now):
-    """TRACE-05: HOT_FILE for each file with >= HOT_FILE_MIN_FAILS errored calls; returns emitted targets."""
-    hot = [(p, n) for p, n in failed_files(transcript_path).items() if n >= HOT_FILE_MIN_FAILS]
-    for path, n in hot:
-        add(db, project, "HOT_FILE", path, f"{n} failed tool calls in one session", agent, session_id, now)
-    return [p for p, _ in hot]
+def project_of(path):
+    """(project slug, repo-relative posix path) for a file under ace.PROJECTS, else None. Case-insensitive on
+    Windows, so lowercased transcript paths still match."""
+    p = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+    root = os.path.normcase(os.path.normpath(os.path.abspath(str(ace.PROJECTS))))
+    if not p.startswith(root + os.sep):
+        return None
+    parts = p[len(root) + 1:].split(os.sep)
+    if len(parts) < 2:
+        return None
+    return ace.slugify(parts[0]), "/".join(parts[1:])
+
+
+def emit_hot_files(db, transcript_path, agent, session_id, now):
+    """TRACE-05: HOT_FILE for each file with >= HOT_FILE_MIN_FAILS errored calls, filed under the file's own
+    project (not the session's cwd scope) with a repo-relative target; files outside PROJECTS are skipped.
+    Returns the emitted (project, target) pairs."""
+    emitted = []
+    for path, n in failed_files(transcript_path).items():
+        where = project_of(path) if n >= HOT_FILE_MIN_FAILS else None
+        if where:
+            add(db, where[0], "HOT_FILE", where[1], f"{n} failed tool calls in one session", agent, session_id, now)
+            emitted.append(where)
+    return emitted
