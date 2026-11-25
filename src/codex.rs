@@ -84,6 +84,62 @@ pub fn render(project: &str, rec: &Record, agent: &str, session: &str, date: &st
     (sha, text)
 }
 
+pub const CONTEXT_MAX_LINES: usize = 6;
+pub const CONTEXT_MAX_CODICES: usize = 20;
+const CONTEXT_KINDS: [(&str, &str); 2] = [("Dead ends", "dead end"), ("Open threads", "open thread")];
+
+/// {section title: items} from a rendered codex body; `- none` placeholders dropped.
+fn sections(text: &str) -> std::collections::HashMap<String, Vec<String>> {
+    let mut out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut cur: Option<String> = None;
+    for line in text.lines() {
+        if let Some(title) = line.strip_prefix("## ") {
+            let title = title.trim().to_string();
+            out.entry(title.clone()).or_default();
+            cur = Some(title);
+        } else if let (Some(c), Some(item)) = (&cur, line.strip_prefix("- ")) {
+            if line != "- none" {
+                out.get_mut(c).unwrap().push(item.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// CODEX-03: Dead ends + Open threads from the newest codices whose Files overlap the task.
+pub fn context_section(vault: &Path, project: &str, task: &str) -> String {
+    let want = crate::trace::words(task);
+    let folder = vault.join("codices").join(project);
+    if want.is_empty() || !folder.is_dir() {
+        return String::new();
+    }
+    let mut notes: Vec<PathBuf> = std::fs::read_dir(&folder)
+        .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).collect())
+        .unwrap_or_default();
+    notes.retain(|p| p.extension().is_some_and(|x| x == "md"));
+    notes.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    let mut lines = Vec::new();
+    for note in notes.iter().take(CONTEXT_MAX_CODICES) {
+        let Ok(text) = std::fs::read_to_string(note) else { continue };
+        let secs = sections(&text);
+        let files = secs.get("Files").map(|f| f.join(" ")).unwrap_or_default();
+        if crate::trace::words(&files).is_disjoint(&want) {
+            continue;
+        }
+        let stem = note.file_stem().unwrap_or_default().to_string_lossy();
+        for (title, kind) in CONTEXT_KINDS {
+            for item in secs.get(title).into_iter().flatten() {
+                lines.push(format!("- {kind}: {item} ({stem})"));
+            }
+        }
+    }
+    lines.truncate(CONTEXT_MAX_LINES);
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!("## codex notes for this task (dead ends, open threads)\n{}", lines.join("\n"))
+}
+
 /// Validate, write the note (never overwrite), leave DEAD_END traces; returns the note path.
 #[allow(clippy::too_many_arguments)]
 pub fn write(
@@ -169,6 +225,27 @@ mod tests {
         rec.open_threads = vec!["x".to_string(); 40];
         assert!(write(&tmp, &conn, "demo", &rec, "a", "s", "2026-11-25", 0).is_err());
         assert!(!tmp.join("codices").exists());
+    }
+
+    #[test]
+    fn test_context_section_filters_by_file_overlap() {
+        let tmp = std::env::temp_dir().join(format!("hive-codex-ctx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let conn = Connection::open_in_memory().unwrap();
+        let mut a = parse(REC).unwrap();
+        a.open_threads = vec!["wire CLI".into()];
+        write(&tmp, &conn, "demo", &a, "claude", "s1", "2026-11-25", 0).unwrap();
+        let mut b = parse(REC).unwrap();
+        b.files = vec!["ui/app.ts".into()];
+        b.dead_ends = vec!["css grid broke".into()];
+        write(&tmp, &conn, "demo", &b, "codex", "s2", "2026-11-24", 0).unwrap();
+        let s = context_section(&tmp, "demo", "fix codex write in src/codex.rs");
+        assert!(s.starts_with("## codex notes"));
+        assert!(s.contains("dead end: serde_yaml") && s.contains("open thread: wire CLI"));
+        assert!(!s.contains("css grid") && !s.contains("Recall@5"));
+        assert_eq!(context_section(&tmp, "demo", ""), "");
+        assert_eq!(context_section(&tmp, "other", "codex"), "");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

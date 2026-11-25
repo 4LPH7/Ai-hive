@@ -801,10 +801,17 @@ def traces_section(db, project, task):
     """TRACE-04: live traces for hive_context; a broken trace table never blocks context."""
     try:
         import traces
-        return traces.context_section(traces.active(db, project, int(time.time())), task)
+        live = traces.context_section(traces.active(db, project, int(time.time())), task)
     except (sqlite3.Error, ValueError) as exc:
         print(f"hive: traces skipped: {exc}", file=sys.stderr)
-        return ""
+        live = ""
+    try:  # CODEX-03: codex dead ends / open threads share the traces slice
+        import codex
+        notes = codex.context_section(VAULT, project, task)
+    except OSError as exc:
+        print(f"hive: codex notes skipped: {exc}", file=sys.stderr)
+        notes = ""
+    return "\n\n".join(s for s in (live, notes) if s)
 
 
 def tool_context(project, task="", budget=1500):

@@ -146,7 +146,7 @@ pub fn active(conn: &Connection, project: &str, now: i64) -> Result<Vec<(Trace, 
 
 pub const CONTEXT_MAX_TRACES: usize = 5;
 
-fn words(s: &str) -> std::collections::HashSet<String> {
+pub(crate) fn words(s: &str) -> std::collections::HashSet<String> {
     s.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() >= 3)

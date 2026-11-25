@@ -552,6 +552,13 @@ pub fn tool_context(
             String::new()
         }
     };
+    // CODEX-03: codex dead ends / open threads share the traces slice
+    let codex_notes = crate::codex::context_section(&idx.vault, &slug, task);
+    let traces_section = [traces_section, codex_notes]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
     let sections = [
         Section {

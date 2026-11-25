@@ -52,5 +52,25 @@ class CodexWriteTest(unittest.TestCase):
         self.assertFalse((self.vault / "codices").exists())
 
 
+class CodexContextTest(unittest.TestCase):
+    """CODEX-03: only Dead ends + Open threads from codices whose files overlap the task."""
+
+    def test_context_section_filters_by_file_overlap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = sqlite3.connect(":memory:")
+            codex.write(tmp, db, "demo", dict(REC, open_threads=["wire CLI"]), "claude", "s1", "2026-11-25", 0)
+            codex.write(tmp, db, "demo", dict(REC, files=["ui/app.ts"], dead_ends=["css grid broke"]),
+                        "codex", "s2", "2026-11-24", 0)
+            s = codex.context_section(tmp, "demo", "fix codex write in src/codex.rs")
+            self.assertTrue(s.startswith("## codex notes"))
+            self.assertIn("dead end: serde_yaml", s)
+            self.assertIn("open thread: wire CLI", s)
+            self.assertNotIn("css grid", s)
+            self.assertNotIn("Recall@5", s)  # invariants are not injected
+            self.assertEqual(codex.context_section(tmp, "demo", ""), "")
+            self.assertEqual(codex.context_section(tmp, "other", "codex"), "")
+            db.close()
+
+
 if __name__ == "__main__":
     unittest.main()

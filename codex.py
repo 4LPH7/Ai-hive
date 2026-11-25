@@ -52,6 +52,39 @@ def render(project, rec, agent, session, date):
     return sha, "\n".join(head) + "\n" + body_text
 
 
+CONTEXT_MAX_LINES = 6
+CONTEXT_MAX_CODICES = 20
+CONTEXT_KINDS = {"Dead ends": "dead end", "Open threads": "open thread"}
+
+
+def _sections(text):
+    """{section title: [items]} from a rendered codex body; '- none' placeholders dropped."""
+    out, cur = {}, None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            cur = out.setdefault(line[3:].strip(), [])
+        elif cur is not None and line.startswith("- ") and line != "- none":
+            cur.append(line[2:])
+    return out
+
+
+def context_section(vault, project, task):
+    """CODEX-03: Dead ends + Open threads from the newest codices whose Files overlap the task."""
+    want = traces._words(task)
+    folder = Path(vault) / "codices" / project
+    if not want or not folder.is_dir():
+        return ""
+    lines = []
+    for note in sorted(folder.glob("*.md"), reverse=True)[:CONTEXT_MAX_CODICES]:
+        secs = _sections(note.read_text(encoding="utf-8", errors="replace"))
+        if not traces._words(" ".join(secs.get("Files", []))) & want:
+            continue
+        lines += [f"- {kind}: {item} ({note.stem})" for title, kind in CONTEXT_KINDS.items()
+                  for item in secs.get(title, [])]
+    lines = lines[:CONTEXT_MAX_LINES]
+    return "## codex notes for this task (dead ends, open threads)\n" + "\n".join(lines) if lines else ""
+
+
 def write(vault, db, project, rec, agent, session, date, now):
     """Validate, write the note (never overwrite), leave DEAD_END traces; returns the note path."""
     project = hive.validate_slug(project)
