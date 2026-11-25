@@ -52,6 +52,21 @@ def render(project, rec, agent, session, date):
     return sha, "\n".join(head) + "\n" + body_text
 
 
+def verify(text):
+    """CODEX-04: None when the body matches its content_sha256, else the reason. CRLF/BOM are normalized
+    first so a git autocrlf checkout does not look like tampering."""
+    text = text.lstrip("﻿").replace("\r\n", "\n")
+    head, sep, body = text.partition("\n---\n")
+    if not sep or not head.startswith("---"):
+        return "frontmatter block missing"
+    stored = next((l.split(":", 1)[1].strip() for l in head.splitlines() if l.startswith("content_sha256:")), "")
+    if not stored:
+        return "content_sha256 missing"
+    if stored != hashlib.sha256(body.encode("utf-8")).hexdigest():
+        return "content_sha256 mismatch: body was edited after writing (codices are immutable)"
+    return None
+
+
 CONTEXT_MAX_LINES = 6
 CONTEXT_MAX_CODICES = 20
 CONTEXT_KINDS = {"Dead ends": "dead end", "Open threads": "open thread"}

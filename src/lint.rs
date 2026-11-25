@@ -300,6 +300,18 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
             }
         }
 
+        // CODEX-04: codices are immutable; a body hash mismatch means someone edited one
+        if meta.get("type").map(|t| t.as_str()) == Some("codex") {
+            if let Some(problem) = crate::codex::verify(&content) {
+                findings.push(Finding {
+                    severity: "ERROR".to_string(),
+                    code: "codex-tampered".to_string(),
+                    path: rel.clone(),
+                    message: problem,
+                });
+            }
+        }
+
         // Frontmatter checks
         if !EXEMPT_FRONTMATTER.contains(&rel.as_str()) {
             if !has_frontmatter {

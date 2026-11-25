@@ -52,6 +52,23 @@ class CodexWriteTest(unittest.TestCase):
         self.assertFalse((self.vault / "codices").exists())
 
 
+class CodexVerifyTest(unittest.TestCase):
+    """CODEX-04: body hash mismatch is a lint ERROR; CRLF checkouts still verify."""
+
+    def test_verify_and_lint_finding(self):
+        import lint
+        _, text = codex.render("demo", REC, "claude", "s1", "2026-11-25")
+        self.assertIsNone(codex.verify(text))
+        self.assertIsNone(codex.verify("﻿" + text.replace("\n", "\r\n")))
+        self.assertIn("mismatch", codex.verify(text.replace("add codex write", "add codex WRITE")))
+        self.assertIn("missing", codex.verify("\n".join(l for l in text.splitlines() if "sha256" not in l)))
+        meta = {"type": "codex"}
+        self.assertEqual(lint.check_codex("codices/demo/x.md", meta, text), [])
+        bad = lint.check_codex("codices/demo/x.md", meta, text.replace("tests pass", "tests fail"))
+        self.assertEqual([(f.severity, f.code) for f in bad], [("ERROR", "codex-tampered")])
+        self.assertEqual(lint.check_codex("notes/x.md", {"type": "note"}, "no hash"), [])
+
+
 class CodexContextTest(unittest.TestCase):
     """CODEX-03: only Dead ends + Open threads from codices whose files overlap the task."""
 

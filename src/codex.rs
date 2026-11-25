@@ -84,6 +84,27 @@ pub fn render(project: &str, rec: &Record, agent: &str, session: &str, date: &st
     (sha, text)
 }
 
+/// CODEX-04: None when the body matches its content_sha256, else the reason. CRLF/BOM are normalized first
+/// so a git autocrlf checkout does not look like tampering.
+pub fn verify(text: &str) -> Option<String> {
+    let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+    let Some((head, body)) = text.split_once("\n---\n").filter(|(h, _)| h.starts_with("---")) else {
+        return Some("frontmatter block missing".to_string());
+    };
+    let stored = head
+        .lines()
+        .find_map(|l| l.strip_prefix("content_sha256:"))
+        .map(str::trim)
+        .unwrap_or("");
+    if stored.is_empty() {
+        return Some("content_sha256 missing".to_string());
+    }
+    if stored != crate::common::sha256(body.as_bytes()) {
+        return Some("content_sha256 mismatch: body was edited after writing (codices are immutable)".to_string());
+    }
+    None
+}
+
 pub const CONTEXT_MAX_LINES: usize = 6;
 pub const CONTEXT_MAX_CODICES: usize = 20;
 const CONTEXT_KINDS: [(&str, &str); 2] = [("Dead ends", "dead end"), ("Open threads", "open thread")];
@@ -246,6 +267,16 @@ mod tests {
         assert_eq!(context_section(&tmp, "demo", ""), "");
         assert_eq!(context_section(&tmp, "other", "codex"), "");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_verify_detects_tampering_and_tolerates_crlf() {
+        let (_, text) = render("demo", &parse(REC).unwrap(), "claude", "s1", "2026-11-25");
+        assert_eq!(verify(&text), None);
+        assert_eq!(verify(&format!("\u{feff}{}", text.replace('\n', "\r\n"))), None);
+        assert!(verify(&text.replace("add codex write", "add codex WRITE")).unwrap().contains("mismatch"));
+        let no_hash: String = text.lines().filter(|l| !l.contains("sha256")).collect::<Vec<_>>().join("\n");
+        assert!(verify(&no_hash).unwrap().contains("missing"));
     }
 
     #[test]
