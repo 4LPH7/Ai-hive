@@ -681,6 +681,15 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
     let id = req.get("id");
     let method = req.get("method")?.as_str()?;
 
+    // PROV-01: the client names itself in `initialize` (legacy) or per request in `_meta` (2026-07-28).
+    if let Some(name) = req
+        .pointer("/params/clientInfo/name")
+        .or_else(|| req.pointer("/params/_meta/io.modelcontextprotocol~1clientInfo/name"))
+        .and_then(|v| v.as_str())
+    {
+        crate::ledger::set_context(crate::ledger::agent_from_hint(name).as_deref(), None);
+    }
+
     match method {
         "initialize" => {
             let client_ver = req
@@ -936,6 +945,18 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "hive_context"));
         assert!(tools.iter().any(|t| t["name"] == "hive_search"));
         assert!(tools.iter().any(|t| t["name"] == "hive_graph"));
+    }
+
+    #[test]
+    fn test_initialize_client_info_sets_ledger_agent() {
+        let mut idx = Index::in_memory().unwrap();
+        let init_req = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25", "clientInfo": {"name": "claude-code", "version": "2"}}
+        });
+        handle_rpc(&mut idx, &init_req).unwrap();
+        // only this test sets process context, so the result is deterministic under parallel tests
+        assert_eq!(crate::ledger::resolve_agent(None), "claude");
     }
 
     #[test]

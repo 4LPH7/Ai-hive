@@ -405,6 +405,61 @@ pub struct DeltaOps {
     pub remove: Option<Vec<String>>,
 }
 
+/// Parse a delta in either format: native `{add, tag, remove}` or the `hive-ace` skill / Python format
+/// `{operations: [{type: ADD|TAG, ...}], bullet_tags: [{id, tag}]}`. A JSON object with none of these keys
+/// is an error, so a format mismatch can never again apply "0 changes" silently.
+pub fn parse_delta(json_str: &str) -> Result<DeltaOps, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|e| format!("invalid JSON: {e}"))?;
+    let known = ["add", "tag", "remove", "operations", "bullet_tags"];
+    if !v.is_object() || !known.iter().any(|k| v.get(k).is_some()) {
+        return Err(format!("delta has none of the keys {known:?}"));
+    }
+    let mut ops: DeltaOps = serde_json::from_value(serde_json::json!({
+        "add": v.get("add"), "tag": v.get("tag"), "remove": v.get("remove"),
+    }))
+    .map_err(|e| format!("bad native delta: {e}"))?;
+    let mut adds = ops.add.take().unwrap_or_default();
+    let mut tags = ops.tag.take().unwrap_or_default();
+    let list = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default()
+    };
+    for op in list("operations").iter().chain(list("bullet_tags").iter()) {
+        let field = |k: &str| op.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let kind = op
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("TAG")
+            .to_ascii_uppercase();
+        match kind.as_str() {
+            "ADD" => adds.push(AddOp {
+                section: field("section"),
+                content: field("content"),
+            }),
+            "TAG" => match field("tag").as_str() {
+                "helpful" => tags.push(TagOp {
+                    id: field("id"),
+                    helpful: Some(1),
+                    harmful: None,
+                }),
+                "harmful" => tags.push(TagOp {
+                    id: field("id"),
+                    helpful: None,
+                    harmful: Some(1),
+                }),
+                _ => {} // neutral
+            },
+            other => return Err(format!("unknown operation type {other:?}")),
+        }
+    }
+    ops.add = (!adds.is_empty()).then_some(adds);
+    ops.tag = (!tags.is_empty()).then_some(tags);
+    Ok(ops)
+}
+
 pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Result<usize, String> {
     let mut changed = 0usize;
 
@@ -604,6 +659,28 @@ mod tests {
         ));
         assert!(is_secret("ghp_123456789012345678901234567890123456"));
         assert!(!is_secret("use cargo test to run unit tests"));
+    }
+
+    #[test]
+    fn test_parse_delta_accepts_skill_format_and_rejects_unknown() {
+        let skill = r#"{"operations":[{"type":"ADD","section":"pitfalls","content":"x"}],
+                        "bullet_tags":[{"id":"cmd-00003","tag":"helpful"},{"id":"pit-00001","tag":"neutral"}]}"#;
+        let ops = parse_delta(skill).unwrap();
+        assert_eq!(ops.add.as_ref().unwrap().len(), 1);
+        let tags = ops.tag.unwrap();
+        assert_eq!(
+            (tags.len(), tags[0].id.as_str(), tags[0].helpful),
+            (1, "cmd-00003", Some(1))
+        );
+
+        let native =
+            r#"{"add":[{"section":"commands","content":"y"}],"tag":[{"id":"a","harmful":1}]}"#;
+        let ops = parse_delta(native).unwrap();
+        assert_eq!(ops.add.unwrap()[0].section, "commands");
+        assert_eq!(ops.tag.unwrap()[0].harmful, Some(1));
+
+        assert!(parse_delta(r#"{"adds":[]}"#).is_err());
+        assert!(parse_delta(r#"{"operations":[{"type":"DELETE"}]}"#).is_err());
     }
 
     #[test]

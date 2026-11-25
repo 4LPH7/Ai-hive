@@ -17,15 +17,96 @@ def detect_agent():
     return "unknown"
 
 
-def record(ledger_path, event, project="", query="", hits=None, injected_bullets=None, duration_ms=0.0, agent=None, session_id=None):
+# ---------------------------------------------------------------- provenance (PROV-01)
+# Process-wide context set once by whoever knows it best: MCP `initialize` clientInfo, or a hook's stdin JSON.
+# record() falls back to it, then to env, then to a per-process session id, so session_id is never empty.
+
+_CONTEXT = {"agent": None, "session_id": None}
+_PROCESS_SESSION = None
+
+
+def set_context(agent=None, session_id=None):
+    """Set process-wide provenance. Empty or missing values leave the current value alone."""
+    if agent and str(agent).strip():
+        _CONTEXT["agent"] = str(agent).strip()
+    if session_id and str(session_id).strip():
+        _CONTEXT["session_id"] = str(session_id).strip()
+
+
+def agent_from_hint(hint):
+    """Map an MCP clientInfo.name or a transcript path to a stable agent label (None if empty)."""
+    h = str(hint or "").lower()
+    if not h.strip():
+        return None
+    for needle, label in (("claude", "claude"), ("codex", "codex"), ("antigravity", "antigravity"), ("gemini", "antigravity")):
+        if needle in h:
+            return label
+    if "/" in h or "\\" in h:  # an unrecognised path says nothing about the agent
+        return None
+    label ="".join(c if c.isascii() and c.isalnum() else "-" for c in h)[:40].strip("-")
+    return label or None
+
+
+def process_session_id():
+    """One id per process: an MCP stdio server lives exactly as long as one agent session."""
+    global _PROCESS_SESSION
+    if _PROCESS_SESSION is None:
+        _PROCESS_SESSION = f"proc-{os.getpid()}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    return _PROCESS_SESSION
+
+
+def resolve_agent(explicit=None):
+    return (str(explicit).strip() if explicit and str(explicit).strip() else None) or _CONTEXT["agent"] or detect_agent()
+
+
+def resolve_session(explicit=None):
+    for value in (explicit, _CONTEXT["session_id"], os.environ.get("HIVE_SESSION_ID")):
+        if value and str(value).strip():
+            return str(value).strip()
+    return process_session_id()
+
+
+def repo_head(directory):
+    """Short HEAD sha of the repo at `directory`, or '' when it is not a git repo (fail-open)."""
+    try:
+        import subprocess
+        res = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(directory),
+                             capture_output=True, text=True, timeout=5)
+        return res.stdout.strip() if res.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def record_ace_apply(ledger_path, scope, added, content_sha256="", repo_sha=""):
+    """PROV-02/04: an ACE delta was merged; `added` bullet ids carry each bullet's origin session/agent."""
+    return record(ledger_path, event="ace_apply", project=scope, injected_bullets=list(added),
+                  repo_sha=repo_sha, content_sha256=content_sha256)
+
+
+def coverage(entries):
+    """PROV-03: counts of events that carry session id and agent; proc-* ids are process-scoped fallbacks."""
+    c = {"total": len(entries), "with_session": 0, "with_agent": 0, "fallback_session": 0}
+    for e in entries:
+        sid = str(e.get("session_id") or "").strip()
+        if sid:
+            c["with_session"] += 1
+            c["fallback_session"] += sid.startswith("proc-")
+        agent = str(e.get("agent") or "").strip()
+        if agent and agent != "unknown":
+            c["with_agent"] += 1
+    return c
+
+
+def record(ledger_path, event, project="", query="", hits=None, injected_bullets=None, duration_ms=0.0, agent=None,
+           session_id=None, repo_sha="", content_sha256=""):
     """Append a structured JSONL event to the local ledger. Fail-open guarantee."""
     try:
         p = Path(ledger_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
-            "session_id": session_id or os.environ.get("HIVE_SESSION_ID") or "",
-            "agent": agent or detect_agent(),
+            "session_id": resolve_session(session_id),
+            "agent": resolve_agent(agent),
             "project": project,
             "event": event,
             "query": query,
@@ -33,6 +114,10 @@ def record(ledger_path, event, project="", query="", hits=None, injected_bullets
             "injected_bullets": injected_bullets or [],
             "duration_ms": round(float(duration_ms), 2),
         }
+        if repo_sha:
+            entry["repo_sha"] = repo_sha
+        if content_sha256:
+            entry["content_sha256"] = content_sha256
         line = json.dumps(entry, ensure_ascii=False) + "\n"
         with open(p, "a", encoding="utf-8") as f:
             f.write(line)

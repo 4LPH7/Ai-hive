@@ -87,6 +87,9 @@ enum Commands {
         tail: Option<usize>,
         #[arg(long)]
         project: Option<String>,
+        /// Print provenance coverage (session id + agent) instead of events
+        #[arg(long)]
+        coverage: bool,
     },
     /// Auto-select best skill for task, or discover and install from remote registry
     Skill {
@@ -264,7 +267,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 command,
                 tail,
                 project,
+                coverage,
             } => {
+                if coverage && command.is_none() {
+                    let entries =
+                        ai_hive::ledger::read_ledger(&cfg.ledger, tail, project.as_deref());
+                    let c = ai_hive::ledger::coverage(&entries);
+                    let pct = |n| ai_hive::ledger::Coverage::percent(n, c.total);
+                    println!(
+                        "ledger coverage: {} events | session_id {:.1}% ({} process-scoped) | agent {:.1}%",
+                        c.total,
+                        pct(c.with_session),
+                        c.fallback_session,
+                        pct(c.with_agent)
+                    );
+                    return Ok(());
+                }
                 match command {
                     Some(LedgerCommands::Score {
                         session,
@@ -383,8 +401,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             io::stdin().read_to_string(&mut buf)?;
                             buf
                         };
-                        let ops: DeltaOps = serde_json::from_str(&json_str)?;
+                        let ops: DeltaOps = ai_hive::ace::parse_delta(&json_str)?;
+                        let ids = |v: &std::path::Path| -> std::collections::HashSet<String> {
+                            load(v, &scope)
+                                .map(|s| s.values().flatten().map(|b| b.id.clone()).collect())
+                                .unwrap_or_default()
+                        };
+                        let before = ids(&vault);
                         let changed = apply_with_lock(&vault, &scope, &ops)?;
+                        let mut added: Vec<String> =
+                            ids(&vault).difference(&before).cloned().collect();
+                        added.sort();
+                        let content_sha = ai_hive::ace::scope_path(&vault, &scope)
+                            .ok()
+                            .and_then(|p| fs::read(p).ok())
+                            .map(|b| ai_hive::common::sha256(&b))
+                            .unwrap_or_default();
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        ai_hive::ledger::record_ace_apply(
+                            &cfg.ledger,
+                            &scope,
+                            &added,
+                            &content_sha,
+                            &ai_hive::ledger::repo_head(&cwd),
+                        );
                         println!("ace: applied {} changes to {}", changed, scope);
                     }
                     AceCommands::Show { scope, task } => {
