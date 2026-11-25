@@ -12,3 +12,4 @@ pub mod mcp;
 pub mod miner;
 pub mod packer;
 pub mod skill;
+pub mod trace;

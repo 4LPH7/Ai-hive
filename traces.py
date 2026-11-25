@@ -1,0 +1,77 @@
+"""Stigmergic trace layer (v2.6.0, TRACE-01/02); Python mirror of src/trace.rs, same table.
+
+Agents leave short decaying signals in the disposable hive.sqlite: strength halves every half_life_h hours,
+traces under MIN_STRENGTH are hidden, rows older than 7 days are purged. Canonical Markdown is never touched.
+(Named traces.py: `trace` is a stdlib module.)
+"""
+import ace
+
+KINDS = {"DEAD_END": 24.0, "RECENT_FIX": 48.0, "HOT_FILE": 12.0}  # ACTIVE_LEASE waits for TRACE-06
+MIN_STRENGTH = 0.15
+MAX_STRENGTH = 3.0
+MAX_SUMMARY_CHARS = 200
+PURGE_AFTER_SECS = 7 * 24 * 3600
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS traces(id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL,
+    kind TEXT NOT NULL, target TEXT NOT NULL, summary TEXT NOT NULL, agent TEXT NOT NULL,
+    session_id TEXT NOT NULL, w0 REAL NOT NULL, created_at INTEGER NOT NULL, half_life_h REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS traces_project ON traces(project, kind, target);
+"""
+
+
+def strength(w0, created_at, now, half_life_h):
+    """w(t) = w0 * 2^(-dt / h), dt in hours; clock skew never inflates."""
+    dt_h = max(0, now - created_at) / 3600.0
+    return w0 * 2 ** (-dt_h / half_life_h)
+
+
+def ensure_table(db):
+    db.executescript(SCHEMA)
+
+
+def add(db, project, kind, target, summary, agent, session_id, now):
+    """Insert a trace, or reinforce one from another session (+1.0, capped, clock restarts)."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown trace kind {kind!r}; use one of {sorted(KINDS)}")
+    summary = " ".join(str(summary).split())
+    if not str(project).strip() or not str(target).strip() or not summary:
+        raise ValueError("project, target and summary are required")
+    if len(summary) > MAX_SUMMARY_CHARS:
+        raise ValueError(f"summary over {MAX_SUMMARY_CHARS} characters")
+    if ace.SECRET_RE.search(summary) or ace.SECRET_RE.search(str(target)):
+        raise ValueError("trace looks like it contains a secret; not stored")
+    ensure_table(db)
+    row = db.execute("SELECT id, session_id, w0, created_at, half_life_h FROM traces "
+                     "WHERE project=? AND kind=? AND target=? ORDER BY created_at DESC LIMIT 1",
+                     (project, kind, target)).fetchone()
+    with db:
+        if row:
+            tid, sess, w0, created, hl = row
+            if sess == session_id:
+                return tid
+            w = min(strength(w0, created, now, hl) + 1.0, MAX_STRENGTH)
+            db.execute("UPDATE traces SET w0=?, created_at=?, summary=?, agent=?, session_id=? WHERE id=?",
+                       (w, now, summary, agent, session_id, tid))
+            return tid
+        cur = db.execute("INSERT INTO traces(project, kind, target, summary, agent, session_id, w0, created_at, "
+                         "half_life_h) VALUES (?,?,?,?,?,?,1.0,?,?)",
+                         (project, kind, target, summary, agent, session_id, now, KINDS[kind]))
+        return cur.lastrowid
+
+
+def active(db, project, now):
+    """[(trace dict, strength)] above MIN_STRENGTH, strongest first, after purging rows older than 7 days."""
+    ensure_table(db)
+    with db:
+        db.execute("DELETE FROM traces WHERE created_at < ?", (now - PURGE_AFTER_SECS,))
+    cols = ("id", "project", "kind", "target", "summary", "agent", "session_id", "w0", "created_at", "half_life_h")
+    rows = db.execute(f"SELECT {', '.join(cols)} FROM traces WHERE project=?", (project,)).fetchall()
+    out = []
+    for r in rows:
+        t = dict(zip(cols, r))
+        w = strength(t["w0"], t["created_at"], now, t["half_life_h"])
+        if w >= MIN_STRENGTH:
+            out.append((t, w))
+    out.sort(key=lambda x: -x[1])
+    return out
