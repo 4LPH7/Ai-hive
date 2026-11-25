@@ -135,7 +135,10 @@ enum Commands {
 #[derive(Subcommand, Debug)]
 pub enum CodexCommands {
     /// Write codices/<project>/YYYY-MM-DD-<sha8>.md from a JSON record file; dead ends become DEAD_END traces
-    Write { project: String, record_file: PathBuf },
+    Write {
+        project: String,
+        record_file: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -467,7 +470,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Commands::Codex {
-                cmd: CodexCommands::Write { project, record_file },
+                cmd:
+                    CodexCommands::Write {
+                        project,
+                        record_file,
+                    },
             } => {
                 let rec = ai_hive::codex::parse(&fs::read_to_string(&record_file)?)?;
                 let conn = rusqlite::Connection::open(&cfg.db)?;
@@ -482,7 +489,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &chrono::Local::now().format("%Y-%m-%d").to_string(),
                     chrono::Utc::now().timestamp(),
                 )?;
-                println!("codex: wrote {} ({} dead-end traces)", path.display(), rec.dead_ends.len());
+                println!(
+                    "codex: wrote {} ({} dead-end traces)",
+                    path.display(),
+                    rec.dead_ends.len()
+                );
             }
             Commands::Ace { cmd } => {
                 let vault = cfg.vault;

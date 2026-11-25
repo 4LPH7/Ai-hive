@@ -107,7 +107,11 @@ pub fn active(conn: &Connection, project: &str, now: i64) -> Result<Vec<(Trace, 
     ensure_table(conn)?;
     let cutoff = now - PURGE_AFTER_SECS;
     let stale: bool = conn
-        .query_row("SELECT EXISTS(SELECT 1 FROM traces WHERE created_at < ?1)", params![cutoff], |r| r.get(0))
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM traces WHERE created_at < ?1)",
+            params![cutoff],
+            |r| r.get(0),
+        )
         .map_err(|e| e.to_string())?;
     if stale {
         // write + fsync only when something is stale: reads stay read-only (Phase 7 gate < 10 ms)
@@ -163,14 +167,24 @@ pub fn context_section(items: &[(Trace, f64)], task: &str) -> String {
     let want = words(task);
     let lines: Vec<String> = items
         .iter()
-        .filter(|(t, _)| want.is_empty() || !words(&format!("{} {}", t.target, t.summary)).is_disjoint(&want))
+        .filter(|(t, _)| {
+            want.is_empty() || !words(&format!("{} {}", t.target, t.summary)).is_disjoint(&want)
+        })
         .take(CONTEXT_MAX_TRACES)
-        .map(|(t, w)| format!("- {} {} ({}, w={:.2}): {}", t.kind, t.target, t.agent, w, t.summary))
+        .map(|(t, w)| {
+            format!(
+                "- {} {} ({}, w={:.2}): {}",
+                t.kind, t.target, t.agent, w, t.summary
+            )
+        })
         .collect();
     if lines.is_empty() {
         return String::new();
     }
-    format!("## live traces (decaying signals from other agents)\n{}", lines.join("\n"))
+    format!(
+        "## live traces (decaying signals from other agents)\n{}",
+        lines.join("\n")
+    )
 }
 
 #[cfg(test)]
@@ -272,8 +286,28 @@ mod tests {
     #[test]
     fn test_context_section_filters_by_task_overlap() {
         let c = db();
-        add(&c, "demo", "DEAD_END", "src/tokenizer.rs", "patching breaks static link", "claude", "s1", 0).unwrap();
-        add(&c, "demo", "HOT_FILE", "src/ui.rs", "3 failed runs", "codex", "s2", 0).unwrap();
+        add(
+            &c,
+            "demo",
+            "DEAD_END",
+            "src/tokenizer.rs",
+            "patching breaks static link",
+            "claude",
+            "s1",
+            0,
+        )
+        .unwrap();
+        add(
+            &c,
+            "demo",
+            "HOT_FILE",
+            "src/ui.rs",
+            "3 failed runs",
+            "codex",
+            "s2",
+            0,
+        )
+        .unwrap();
         let items = active(&c, "demo", H).unwrap();
         let s = context_section(&items, "fix the tokenizer link error");
         assert!(s.starts_with("## live traces"));

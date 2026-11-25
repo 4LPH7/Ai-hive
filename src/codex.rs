@@ -27,7 +27,9 @@ fn check_text(name: &str, value: &str) -> Result<(), String> {
         return Err(format!("codex: {name} must be a non-empty string"));
     }
     if value.contains('\n') || value.contains('\r') || value.chars().count() > MAX_ITEM_CHARS {
-        return Err(format!("codex: {name} must be one line of at most {MAX_ITEM_CHARS} chars"));
+        return Err(format!(
+            "codex: {name} must be one line of at most {MAX_ITEM_CHARS} chars"
+        ));
     }
     if crate::ace::is_secret(value) {
         return Err(format!("codex: {name} looks like it contains a secret"));
@@ -53,8 +55,19 @@ pub fn parse(json: &str) -> Result<Record, String> {
 }
 
 /// (sha256 of body, full note text).
-pub fn render(project: &str, rec: &Record, agent: &str, session: &str, date: &str) -> (String, String) {
-    let mut body = vec![format!("# {}", rec.goal), String::new(), format!("outcome: {}", rec.outcome), String::new()];
+pub fn render(
+    project: &str,
+    rec: &Record,
+    agent: &str,
+    session: &str,
+    date: &str,
+) -> (String, String) {
+    let mut body = vec![
+        format!("# {}", rec.goal),
+        String::new(),
+        format!("outcome: {}", rec.outcome),
+        String::new(),
+    ];
     for (title, list) in [
         ("Files", &rec.files),
         ("Dead ends", &rec.dead_ends),
@@ -88,7 +101,10 @@ pub fn render(project: &str, rec: &Record, agent: &str, session: &str, date: &st
 /// so a git autocrlf checkout does not look like tampering.
 pub fn verify(text: &str) -> Option<String> {
     let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n");
-    let Some((head, body)) = text.split_once("\n---\n").filter(|(h, _)| h.starts_with("---")) else {
+    let Some((head, body)) = text
+        .split_once("\n---\n")
+        .filter(|(h, _)| h.starts_with("---"))
+    else {
         return Some("frontmatter block missing".to_string());
     };
     let stored = head
@@ -100,14 +116,18 @@ pub fn verify(text: &str) -> Option<String> {
         return Some("content_sha256 missing".to_string());
     }
     if stored != crate::common::sha256(body.as_bytes()) {
-        return Some("content_sha256 mismatch: body was edited after writing (codices are immutable)".to_string());
+        return Some(
+            "content_sha256 mismatch: body was edited after writing (codices are immutable)"
+                .to_string(),
+        );
     }
     None
 }
 
 pub const CONTEXT_MAX_LINES: usize = 6;
 pub const CONTEXT_MAX_CODICES: usize = 20;
-const CONTEXT_KINDS: [(&str, &str); 2] = [("Dead ends", "dead end"), ("Open threads", "open thread")];
+const CONTEXT_KINDS: [(&str, &str); 2] =
+    [("Dead ends", "dead end"), ("Open threads", "open thread")];
 
 /// {section title: items} from a rendered codex body; `- none` placeholders dropped.
 fn sections(text: &str) -> std::collections::HashMap<String, Vec<String>> {
@@ -141,7 +161,9 @@ pub fn context_section(vault: &Path, project: &str, task: &str) -> String {
     notes.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
     let mut lines = Vec::new();
     for note in notes.iter().take(CONTEXT_MAX_CODICES) {
-        let Ok(text) = std::fs::read_to_string(note) else { continue };
+        let Ok(text) = std::fs::read_to_string(note) else {
+            continue;
+        };
         let secs = sections(&text);
         let files = secs.get("Files").map(|f| f.join(" ")).unwrap_or_default();
         if crate::trace::words(&files).is_disjoint(&want) {
@@ -158,7 +180,10 @@ pub fn context_section(vault: &Path, project: &str, task: &str) -> String {
     if lines.is_empty() {
         return String::new();
     }
-    format!("## codex notes for this task (dead ends, open threads)\n{}", lines.join("\n"))
+    format!(
+        "## codex notes for this task (dead ends, open threads)\n{}",
+        lines.join("\n")
+    )
 }
 
 /// Validate, write the note (never overwrite), leave DEAD_END traces; returns the note path.
@@ -177,9 +202,14 @@ pub fn write(
     let (sha, text) = render(&project, rec, agent, session, date);
     let lines = text.lines().count();
     if lines > MAX_LINES {
-        return Err(format!("codex: note would be {lines} lines (max {MAX_LINES}); trim the record"));
+        return Err(format!(
+            "codex: note would be {lines} lines (max {MAX_LINES}); trim the record"
+        ));
     }
-    let path = vault.join("codices").join(&project).join(format!("{date}-{}.md", &sha[..8]));
+    let path = vault
+        .join("codices")
+        .join(&project)
+        .join(format!("{date}-{}.md", &sha[..8]));
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     let mut fh = std::fs::OpenOptions::new()
         .write(true)
@@ -187,15 +217,23 @@ pub fn write(
         .open(&path)
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::AlreadyExists => {
-                format!("codex: {} already exists; codices are never edited", path.display())
+                format!(
+                    "codex: {} already exists; codices are never edited",
+                    path.display()
+                )
             }
             _ => e.to_string(),
         })?;
     fh.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
     let target = rec.files.first().map(String::as_str).unwrap_or("session");
     for dead_end in &rec.dead_ends {
-        let summary: String = dead_end.chars().take(crate::trace::MAX_SUMMARY_CHARS).collect();
-        crate::trace::add(conn, &project, "DEAD_END", target, &summary, agent, session, now)?;
+        let summary: String = dead_end
+            .chars()
+            .take(crate::trace::MAX_SUMMARY_CHARS)
+            .collect();
+        crate::trace::add(
+            conn, &project, "DEAD_END", target, &summary, agent, session, now,
+        )?;
     }
     Ok(path)
 }
@@ -219,11 +257,17 @@ mod tests {
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.lines().count() <= MAX_LINES);
         let (head, body) = text.split_once("\n---\n").unwrap();
-        let sha = head.lines().find_map(|l| l.strip_prefix("content_sha256: ")).unwrap();
+        let sha = head
+            .lines()
+            .find_map(|l| l.strip_prefix("content_sha256: "))
+            .unwrap();
         assert_eq!(sha, crate::common::sha256(body.as_bytes()));
         assert!(head.contains("type: codex") && body.contains("- none"));
         let traces = crate::trace::active(&conn, "demo", 0).unwrap();
-        assert_eq!((traces[0].0.kind.as_str(), traces[0].0.target.as_str()), ("DEAD_END", "src/codex.rs"));
+        assert_eq!(
+            (traces[0].0.kind.as_str(), traces[0].0.target.as_str()),
+            ("DEAD_END", "src/codex.rs")
+        );
         assert!(write(&tmp, &conn, "demo", &rec, "claude", "s1", "2026-11-25", 0).is_err());
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -273,9 +317,18 @@ mod tests {
     fn test_verify_detects_tampering_and_tolerates_crlf() {
         let (_, text) = render("demo", &parse(REC).unwrap(), "claude", "s1", "2026-11-25");
         assert_eq!(verify(&text), None);
-        assert_eq!(verify(&format!("\u{feff}{}", text.replace('\n', "\r\n"))), None);
-        assert!(verify(&text.replace("add codex write", "add codex WRITE")).unwrap().contains("mismatch"));
-        let no_hash: String = text.lines().filter(|l| !l.contains("sha256")).collect::<Vec<_>>().join("\n");
+        assert_eq!(
+            verify(&format!("\u{feff}{}", text.replace('\n', "\r\n"))),
+            None
+        );
+        assert!(verify(&text.replace("add codex write", "add codex WRITE"))
+            .unwrap()
+            .contains("mismatch"));
+        let no_hash: String = text
+            .lines()
+            .filter(|l| !l.contains("sha256"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(verify(&no_hash).unwrap().contains("missing"));
     }
 
@@ -283,6 +336,9 @@ mod tests {
     fn test_render_matches_python_mirror() {
         // sha from codex.render() in codex.py for the same record (cross-language parity)
         let (sha, _) = render("demo", &parse(REC).unwrap(), "claude", "s1", "2026-11-25");
-        assert_eq!(sha, "63434b9d59599cbe13045ad781f48a3a4c85f9299c6d7affe1f110a7595c8595");
+        assert_eq!(
+            sha,
+            "63434b9d59599cbe13045ad781f48a3a4c85f9299c6d7affe1f110a7595c8595"
+        );
     }
 }

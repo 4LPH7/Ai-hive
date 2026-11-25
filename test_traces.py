@@ -76,7 +76,8 @@ class HotFileEmitTest(unittest.TestCase):
             a = str(root / "Demo App" / "src" / "a.rs")
             b = str(root / "Demo App" / "src" / "b.rs")
             outside = str(Path(tmp) / "vault" / "AGENTS.md")
-            calls = [(a, True), (a.lower(), True), (a, True), (b, True), (b, True), (b, False)] + [(outside, True)] * 3
+            a_alias = a.lower() if os.name == "nt" else a  # case-insensitive paths only on Windows
+            calls = [(a, True), (a_alias, True), (a, True), (b, True), (b, True), (b, False)] + [(outside, True)] * 3
             lines = []
             for i, (path, err) in enumerate(calls):
                 lines.append({"message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": "Edit",
@@ -93,7 +94,7 @@ class HotFileEmitTest(unittest.TestCase):
             self.assertEqual(traces.failed_files(tr), {norm(a): 3, norm(b): 2, norm(outside): 3})
             db = sqlite3.connect(":memory:")
             with mock.patch.object(traces.ace, "PROJECTS", root):
-                self.assertEqual(traces.project_of(a.lower()), ("demo-app", "src/a.rs"))
+                self.assertEqual(traces.project_of(a_alias), ("demo-app", "src/a.rs"))
                 self.assertIsNone(traces.project_of(outside))
                 self.assertEqual(traces.emit_hot_files(db, tr, "claude", "s1", 0), [("demo-app", "src/a.rs")])
             (t, _), = traces.active(db, "demo-app", 0)
