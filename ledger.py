@@ -59,11 +59,20 @@ def resolve_agent(explicit=None):
     return (str(explicit).strip() if explicit and str(explicit).strip() else None) or _CONTEXT["agent"] or detect_agent()
 
 
+SESSION_ENV = ("HIVE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")  # agent-shell CLI calls inherit the agent's id
+
+
 def resolve_session(explicit=None):
-    for value in (explicit, _CONTEXT["session_id"], os.environ.get("HIVE_SESSION_ID")):
+    for value in (explicit, _CONTEXT["session_id"], *(os.environ.get(k) for k in SESSION_ENV)):
         if value and str(value).strip():
             return str(value).strip()
     return process_session_id()
+
+
+def is_anonymous(session_id):
+    """True for the per-process fallback id: it changes on every CLI call, so it can never prove that a
+    second, independent session agreed (trace reinforcement, quorum confirmations)."""
+    return not session_id or str(session_id).startswith("proc-")
 
 
 def repo_head(directory):

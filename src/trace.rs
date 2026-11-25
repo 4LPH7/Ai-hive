@@ -82,7 +82,11 @@ pub fn add(
         )
         .ok();
     if let Some((id, sess, w0, created, hl)) = existing {
-        if sess == session_id {
+        // only a distinct, identifiable session reinforces
+        if sess == session_id
+            || crate::ledger::is_anonymous(&sess)
+            || crate::ledger::is_anonymous(session_id)
+        {
             return Ok(id);
         }
         let w = (strength(w0, created, now, hl) + 1.0).min(MAX_STRENGTH);
@@ -226,6 +230,24 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM traces", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn test_anonymous_process_sessions_never_reinforce() {
+        let c = db();
+        add(
+            &c, "demo", "HOT_FILE", "src/b.rs", "x", "claude", "proc-1-a", 0,
+        )
+        .unwrap();
+        add(
+            &c, "demo", "HOT_FILE", "src/b.rs", "x", "claude", "proc-2-b", 0,
+        )
+        .unwrap();
+        add(
+            &c, "demo", "HOT_FILE", "src/b.rs", "x", "codex", "real-s2", 0,
+        )
+        .unwrap();
+        assert!((active(&c, "demo", 0).unwrap()[0].1 - 1.0).abs() < 1e-9);
     }
 
     #[test]

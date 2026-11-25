@@ -37,6 +37,23 @@ class TracesTest(unittest.TestCase):
         self.assertAlmostEqual(w, 1.5)
         self.assertEqual((t["agent"], t["id"]), ("codex", tid))
 
+    def test_anonymous_process_sessions_never_reinforce(self):
+        traces.add(self.db, "demo", "HOT_FILE", "src/b.rs", "x", "claude", "proc-1-a", 0)
+        traces.add(self.db, "demo", "HOT_FILE", "src/b.rs", "x", "claude", "proc-2-b", 0)
+        traces.add(self.db, "demo", "HOT_FILE", "src/b.rs", "x", "codex", "real-s2", 0)
+        self.assertAlmostEqual(traces.active(self.db, "demo", 0)[0][1], 1.0)
+
+    def test_cli_session_falls_back_to_the_agent_session_env(self):
+        import ledger
+        from unittest import mock
+        with mock.patch.dict("os.environ", {"CLAUDE_CODE_SESSION_ID": "cc-123"}, clear=False):
+            with mock.patch.dict("os.environ", {}, clear=False):
+                import os
+                os.environ.pop("HIVE_SESSION_ID", None)
+                self.assertEqual(ledger.resolve_session(), "cc-123")
+        self.assertTrue(ledger.is_anonymous("proc-1-x") and ledger.is_anonymous(""))
+        self.assertFalse(ledger.is_anonymous("cc-123"))
+
     def test_rejects_bad_kind_long_summary_and_secrets(self):
         for args in (("demo", "ACTIVE_LEASE", "x", "y"), ("demo", "DEAD_END", "x", "y" * 201),
                      ("demo", "DEAD_END", "x", "token ghp_123456789012345678901234567890123456"),

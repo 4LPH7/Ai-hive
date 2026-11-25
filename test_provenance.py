@@ -34,7 +34,7 @@ class ProvenanceTest(unittest.TestCase):
         self.assertIsNone(ledger.agent_from_hint(r"C:\Temp\tmp1\t.jsonl"))
 
     def test_session_never_empty_and_precedence(self):
-        with mock.patch.dict("os.environ", {"HIVE_SESSION_ID": ""}, clear=False):
+        with mock.patch.dict("os.environ", {"HIVE_SESSION_ID": "", "CLAUDE_CODE_SESSION_ID": ""}, clear=False):
             self.assertTrue(ledger.resolve_session(None).startswith("proc-"))
             ledger.set_context(session_id="hook-sess")
             self.assertEqual(ledger.resolve_session(None), "hook-sess")

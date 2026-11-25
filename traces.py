@@ -9,6 +9,7 @@ import os
 import re
 
 import ace
+import ledger
 
 KINDS = {"DEAD_END": 24.0, "RECENT_FIX": 48.0, "HOT_FILE": 12.0}  # ACTIVE_LEASE waits for TRACE-06
 MIN_STRENGTH = 0.15
@@ -52,8 +53,8 @@ def add(db, project, kind, target, summary, agent, session_id, now):
     with db:
         if row:
             tid, sess, w0, created, hl = row
-            if sess == session_id:
-                return tid
+            if sess == session_id or ledger.is_anonymous(sess) or ledger.is_anonymous(session_id):
+                return tid  # only a distinct, identifiable session reinforces
             w = min(strength(w0, created, now, hl) + 1.0, MAX_STRENGTH)
             db.execute("UPDATE traces SET w0=?, created_at=?, summary=?, agent=?, session_id=? WHERE id=?",
                        (w, now, summary, agent, session_id, tid))

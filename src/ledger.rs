@@ -113,7 +113,15 @@ pub fn resolve_session(explicit: Option<&str>) -> String {
     non_empty(explicit)
         .or_else(|| provenance().lock().ok().and_then(|p| p.session_id.clone()))
         .or_else(|| non_empty(std::env::var("HIVE_SESSION_ID").ok().as_deref()))
+        // agent-shell CLI calls inherit the agent's id
+        .or_else(|| non_empty(std::env::var("CLAUDE_CODE_SESSION_ID").ok().as_deref()))
         .unwrap_or_else(process_session_id)
+}
+
+/// True for the per-process fallback id: it changes on every CLI call, so it can never prove that a second,
+/// independent session agreed (trace reinforcement, quorum confirmations).
+pub fn is_anonymous(session_id: &str) -> bool {
+    session_id.is_empty() || session_id.starts_with("proc-")
 }
 
 pub fn detect_agent() -> String {
