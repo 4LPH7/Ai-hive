@@ -5,6 +5,7 @@
 Each dead end also becomes a DEAD_END trace in the disposable hive.sqlite.
 """
 import hashlib
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -94,24 +95,50 @@ def render(project, rec, agent, session, date):
         body += [f"## {title}"] + ([f"- {x}" for x in rec[key]] or ["- none"])
     body_text = "\n".join(body) + "\n"
     sha = hashlib.sha256(body_text.encode("utf-8")).hexdigest()
+    source = f"session {session}"
     head = ["---", "type: codex", f"project: {project}", f"agent: {agent}", "status: active",
-            f"updated: {date}", f"source: session {session}", f"content_sha256: {sha}", "---"]
+            f"updated: {date}", f"source: {source}", f"content_sha256: {sha}",
+            f"provenance_sha256: {provenance_sha(project, agent, source, date, sha)}", "---"]
     return sha, "\n".join(head) + "\n" + body_text
 
 
+PROVENANCE_FIELDS = ("project", "agent", "source", "updated", "content_sha256")
+
+
+def provenance_sha(project, agent, source, updated, content_sha):
+    """v2.7.2: binds who/when/which session to the body hash, so editing the session line of a note (for example
+    to slip a quarantined writer's note back into the read path) is detected. Unkeyed: it proves a note was not
+    edited in place, not who wrote it."""
+    return hashlib.sha256("\n".join([project, agent, source, updated, content_sha]).encode("utf-8")).hexdigest()
+
+
+def _head_fields(head):
+    return {k.strip(): v.strip() for k, _, v in (l.partition(":") for l in head.splitlines()[1:]) if _}
+
+
 def verify(text):
-    """CODEX-04: None when the body matches its content_sha256, else the reason. CRLF/BOM are normalized
-    first so a git autocrlf checkout does not look like tampering."""
+    """CODEX-04: None when the body matches its content_sha256 (and, when present, the frontmatter matches its
+    provenance_sha256), else the reason. CRLF/BOM are normalized first so a git autocrlf checkout does not look
+    like tampering. Notes written before v2.7.2 carry no provenance_sha256 and still verify."""
     text = text.lstrip("﻿").replace("\r\n", "\n")
     head, sep, body = text.partition("\n---\n")
     if not sep or not head.startswith("---"):
         return "frontmatter block missing"
-    stored = next((l.split(":", 1)[1].strip() for l in head.splitlines() if l.startswith("content_sha256:")), "")
+    fields = _head_fields(head)
+    stored = fields.get("content_sha256", "")
     if not stored:
         return "content_sha256 missing"
     if stored != hashlib.sha256(body.encode("utf-8")).hexdigest():
         return "content_sha256 mismatch: body was edited after writing (codices are immutable)"
+    seal = fields.get("provenance_sha256")
+    if seal is not None and seal != provenance_sha(*(fields.get(k, "") for k in PROVENANCE_FIELDS)):
+        return "provenance_sha256 mismatch: project, agent, source or updated was edited after writing"
     return None
+
+
+def has_provenance(text):
+    head = text.lstrip("﻿").replace("\r\n", "\n").partition("\n---\n")[0]
+    return "provenance_sha256" in _head_fields(head)
 
 
 CONTEXT_MAX_LINES = 6
@@ -218,6 +245,8 @@ def _load_handoff(vault, project, hid):
         raise ValueError(f"handoff: {hid} integrity check failed; see hive audit {hid}")
     if not _body_head(text)[2]:
         raise ValueError(f"handoff: {hid} is a codex, not a handoff")
+    if not has_provenance(text):
+        raise ValueError(f"handoff: {hid} has no provenance_sha256 (written before v2.7.2); write it again")
     if governance.is_quarantined(governance.load_rules(vault), *governance.note_origin(text)):
         raise ValueError(f"handoff: {hid} is quarantined")
     return rel, path, text
@@ -241,7 +270,7 @@ def handoff_view(vault, project, hid, budget=1500):
     if any(a.startswith("artifact:") for a in secs.get("Artifacts", [])):
         import artifacts
         parts.append(f"artifact:<sha> items live in {artifacts.artifacts_dir()}/<sha>.md")
-    pointer = f"full envelope: {path.resolve()}"
+    pointer = f"full envelope: {os.path.abspath(path)}"  # same string as Rust std::path::absolute
     role = line.partition("role=")[2].strip()
     room = (min(ROLE_BUDGET.get(role, min(ROLE_BUDGET.values())), int(budget))
             - hive.est_tokens("\n\n".join(parts)) - hive.est_tokens(pointer) - SEP_TOKENS)

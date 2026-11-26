@@ -5,6 +5,25 @@ All notable changes to `ai-hive` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.2] - 2026-11-26
+
+### Security
+- **Provenance seal on codices and handoffs (`codex.py`, `src/codex.rs`)**: new notes carry
+  `provenance_sha256 = sha256(project, agent, source, updated, content_sha256)`. `verify()` (and so the
+  `codex-tampered` lint ERROR and `hive audit`) now catches an in-place edit of who/when/which session wrote a
+  note, for example rewriting the session line to slip a quarantined writer's handoff back into the read path.
+  Handoffs without the seal (written by 2.7.1) are refused on read; plain codices without it still verify. The
+  seal is unkeyed: it detects edits, it does not authenticate the writer.
+
+### Fixed
+- `handoff_view`'s `full envelope:` pointer prints the same absolute path in Python (`os.path.abspath`) and Rust
+  (`std::path::absolute`).
+
+### Tests
+- Full note text (frontmatter included) pinned byte-identical across Python and Rust.
+- `hive serve` end-to-end test for concise and detailed `hive_search` / `hive_graph` and the `detail` enum check.
+- Python and Rust tests for the `hive handoff write` warning when the protected core exceeds the role budget.
+
 ## [2.7.1] - 2026-11-26
 
 ### Added

@@ -231,14 +231,52 @@ pub fn render(
         format!("updated: {date}"),
         format!("source: session {session}"),
         format!("content_sha256: {sha}"),
+        format!(
+            "provenance_sha256: {}",
+            provenance_sha(project, agent, &format!("session {session}"), date, &sha)
+        ),
         "---".to_string(),
     ];
     let text = head.join("\n") + "\n" + &body_text;
     (sha, text)
 }
 
-/// CODEX-04: None when the body matches its content_sha256, else the reason. CRLF/BOM are normalized first
-/// so a git autocrlf checkout does not look like tampering.
+/// v2.7.2: binds who/when/which session to the body hash, so editing the session line of a note (for example
+/// to slip a quarantined writer's note back into the read path) is detected. Unkeyed: it proves a note was
+/// not edited in place, not who wrote it. Byte-identical to `codex.provenance_sha`.
+pub fn provenance_sha(
+    project: &str,
+    agent: &str,
+    source: &str,
+    updated: &str,
+    content_sha: &str,
+) -> String {
+    crate::common::sha256(
+        [project, agent, source, updated, content_sha]
+            .join("\n")
+            .as_bytes(),
+    )
+}
+
+/// Frontmatter `key: value` pairs, trimmed (first line `---` skipped).
+fn head_fields(head: &str) -> std::collections::HashMap<String, String> {
+    head.lines()
+        .skip(1)
+        .filter_map(|l| l.split_once(':'))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .collect()
+}
+
+/// True when the note's frontmatter carries a provenance_sha256 seal.
+pub fn has_provenance(text: &str) -> bool {
+    let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+    let head = text.split_once("\n---\n").map(|(h, _)| h).unwrap_or("");
+    head_fields(head).contains_key("provenance_sha256")
+}
+
+/// CODEX-04: None when the body matches its content_sha256 (and, when present, the frontmatter matches its
+/// provenance_sha256), else the reason. CRLF/BOM are normalized first so a git autocrlf checkout does not
+/// look like tampering. Notes written before v2.7.2 carry no provenance_sha256 and still verify.
 pub fn verify(text: &str) -> Option<String> {
     let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n");
     let Some((head, body)) = text
@@ -247,11 +285,9 @@ pub fn verify(text: &str) -> Option<String> {
     else {
         return Some("frontmatter block missing".to_string());
     };
-    let stored = head
-        .lines()
-        .find_map(|l| l.strip_prefix("content_sha256:"))
-        .map(str::trim)
-        .unwrap_or("");
+    let fields = head_fields(head);
+    let get = |k: &str| fields.get(k).map(String::as_str).unwrap_or("");
+    let stored = get("content_sha256");
     if stored.is_empty() {
         return Some("content_sha256 missing".to_string());
     }
@@ -260,6 +296,21 @@ pub fn verify(text: &str) -> Option<String> {
             "content_sha256 mismatch: body was edited after writing (codices are immutable)"
                 .to_string(),
         );
+    }
+    if let Some(seal) = fields.get("provenance_sha256") {
+        let want = provenance_sha(
+            get("project"),
+            get("agent"),
+            get("source"),
+            get("updated"),
+            stored,
+        );
+        if *seal != want {
+            return Some(
+                "provenance_sha256 mismatch: project, agent, source or updated was edited after writing"
+                    .to_string(),
+            );
+        }
     }
     None
 }
@@ -474,6 +525,11 @@ fn load_handoff(
     }
     if body_head(&text).2.is_empty() {
         return Err(format!("handoff: {hid} is a codex, not a handoff"));
+    }
+    if !has_provenance(&text) {
+        return Err(format!(
+            "handoff: {hid} has no provenance_sha256 (written before v2.7.2); write it again"
+        ));
     }
     let (session, agent, ts) = crate::governance::note_origin(&text);
     let rules = crate::governance::load_rules(vault);
@@ -721,6 +777,92 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("hive-hand-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         tmp
+    }
+
+    /// v2.7.2: full note text (frontmatter with provenance_sha256 included) matches codex.py byte for byte.
+    #[test]
+    fn test_full_text_matches_python_mirror() {
+        for (json, want) in [
+            (
+                REC.to_string(),
+                "ceaa9843f2051f922a55b181cb89e451a65b8e9b454758947781db2b76c7e9ff",
+            ),
+            (
+                hand(),
+                "1b92698a996bc13601291cdf5d3be0fc05bcb569f1a9272ec52973a2a9cdb240",
+            ),
+        ] {
+            let rec = parse(&json).or_else(|_| parse_handoff(&json)).unwrap();
+            let (_, text) = render("demo", &rec, "claude", "s1", "2026-11-25");
+            assert_eq!(crate::common::sha256(text.as_bytes()), want);
+        }
+    }
+
+    #[test]
+    fn test_edited_frontmatter_is_detected_and_legacy_notes_still_verify() {
+        let (_, text) = render("demo", &parse(REC).unwrap(), "claude", "s1", "2026-11-25");
+        assert_eq!(verify(&text), None);
+        for (old, new) in [
+            ("source: session s1", "source: session s2"),
+            ("agent: claude", "agent: codex"),
+            ("updated: 2026-11-25", "updated: 2026-11-26"),
+            ("project: demo", "project: other"),
+        ] {
+            assert!(verify(&text.replace(old, new))
+                .unwrap()
+                .contains("provenance_sha256 mismatch"));
+        }
+        let legacy: String = text
+            .lines()
+            .filter(|l| !l.starts_with("provenance_sha256"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert_eq!(verify(&legacy), None);
+        assert!(!has_provenance(&legacy) && has_provenance(&text));
+    }
+
+    #[test]
+    fn test_handoff_view_refuses_edited_and_unsealed_handoffs() {
+        let tmp = tmp_vault("prov");
+        let conn = Connection::open_in_memory().unwrap();
+        let rec = parse_handoff(&hand()).unwrap();
+        let p = write(
+            &tmp,
+            &conn,
+            "demo",
+            &rec,
+            "claude",
+            "bad-s",
+            "2026-11-25",
+            0,
+        )
+        .unwrap();
+        let id = p.file_stem().unwrap().to_string_lossy().to_string();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(handoff_view(&tmp, "demo", &id, 1500)
+            .unwrap()
+            .ends_with(&format!(
+                "full envelope: {}",
+                std::path::absolute(&p).unwrap().display()
+            )));
+        std::fs::write(
+            &p,
+            text.replace("source: session bad-s", "source: session good-s"),
+        )
+        .unwrap();
+        assert!(handoff_view(&tmp, "demo", &id, 1500)
+            .unwrap_err()
+            .contains("integrity check failed"));
+        let unsealed: String = text
+            .lines()
+            .filter(|l| !l.starts_with("provenance_sha256"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        std::fs::write(&p, unsealed).unwrap();
+        assert!(handoff_view(&tmp, "demo", &id, 1500)
+            .unwrap_err()
+            .contains("no provenance_sha256"));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
