@@ -739,7 +739,19 @@ def graph_freshness(d, g):
     return f"graph built at {g.commit[:8]}"
 
 
-def tool_search(query, project="", scope=None, limit=8):
+DETAIL_MODES = ("concise", "detailed")  # DETAIL-01: MCP defaults to concise; tool_* and the CLI stay detailed
+CONCISE_TOOLS = ("hive_search", "hive_graph", "hive_lint")
+DETAIL_PROP = ("string", "concise (default): ids, file:line, one line each; detailed: full", {"enum": list(DETAIL_MODES)})
+
+
+def _check_detail(detail):
+    if detail not in DETAIL_MODES:
+        raise ValueError(f"invalid detail {detail!r}; must be 'concise' or 'detailed'")
+    return detail == "concise"
+
+
+def tool_search(query, project="", scope=None, limit=8, detail="detailed"):
+    concise = _check_detail(detail)
     if scope is None:
         scope = "project" if project else "all"
     if scope not in ("project", "all"):
@@ -756,16 +768,21 @@ def tool_search(query, project="", scope=None, limit=8):
         pass
     if not hits:
         return "no matching notes"
+    if concise:
+        return "\n".join(f"- {h['path']} ({h['type']}) {h['title'][:80]}" for h in hits)
     return "\n".join(f"- {h['path']} ({h['type']}, {h['status']}, {h['updated']}) {h['title']}\n  {h['snippet']}"
                      for h in hits)
 
 
-def tool_graph(repo, query, limit=15):
+def tool_graph(repo, query, limit=15, detail="detailed"):
+    concise = _check_detail(detail)
     d, g = load_graph(repo)
     ranked, edges = g.query(query, int(limit))
     if not ranked:
         return f"no symbols in {d.name} match {query!r}. {graph_freshness(d, g)}"
     lines = [f"{d.name}: {len(g.nodes)} nodes, {graph_freshness(d, g)}. * = matched seed", ""]
+    if concise:  # no community tags, edges or vault notes (labels are whitespace-collapsed by fmt_node)
+        return "\n".join(lines + [fmt_node(g.nodes[nid], seed).rsplit("  [", 1)[0] for nid, _, seed in ranked])
     lines += [fmt_node(g.nodes[nid], seed) for nid, _, seed in ranked]
     if edges:
         lines += ["", "edges among these:"]
@@ -893,9 +910,26 @@ def traces_section(db, project, task):
     return "\n\n".join(s for s in (live, notes) if s)
 
 
-def tool_context(project, task="", budget=1500):
+def frame_untrusted(rel, meta, body):
+    """Quote an agent-written note so the reader treats its text as data, never as instructions."""
+    header = (f"> [!NOTE] Untrusted vault note: path=\"{rel}\", agent=\"{meta.get('agent', 'unknown')}\", "
+              f"source=\"{meta.get('source', 'unknown')}\", age=\"{note_age(meta.get('updated', ''))}\"")
+    return header + "\n" + "\n".join(f"> {line}" for line in body.strip().splitlines())
+
+
+def tool_context(project, task="", budget=1500, handoff=""):
     t0 = time.time()
     project = validate_slug(project)
+    if handoff:  # HAND-01: a receiving agent asked for one envelope; return only that
+        import codex
+        view = codex.handoff_view(VAULT, project, handoff, int(budget))
+        try:
+            import ledger
+            ledger.record(LEDGER_PATH, event="context", project=project, query=f"handoff {handoff}",
+                          hits=[f"codices/{project}/{handoff}.md"], duration_ms=(time.time() - t0) * 1000.0)
+        except Exception:
+            pass
+        return view
     idx = index()
 
     # 1. Memory section
@@ -914,14 +948,8 @@ def tool_context(project, task="", budget=1500):
     memory_text = idx.note(f"projects/{project}/_memory.md")
     if memory_text:
         meta, _, body = parse_note(memory_text)
-        agent = meta.get("agent", "unknown")
-        source = meta.get("source", "unknown")
-        updated = meta.get("updated", "")
-        age = note_age(updated)
-        header = f"> [!NOTE] Untrusted vault note: path=\"projects/{project}/_memory.md\", agent=\"{agent}\", source=\"{source}\", age=\"{age}\""
-        quoted_lines = [f"> {line}" for line in body.strip().splitlines()]
-        framed_body = header + "\n" + "\n".join(quoted_lines)
-        mem_parts.append(f"## projects/{project}/_memory.md ({age})\n{framed_body}")
+        framed_body = frame_untrusted(f"projects/{project}/_memory.md", meta, body)
+        mem_parts.append(f"## projects/{project}/_memory.md ({note_age(meta.get('updated', ''))})\n{framed_body}")
     else:
         mem_parts.append(f"## projects/{project}/_memory.md\n(none yet: create it from templates/project-memory.md)")
 
@@ -1035,9 +1063,11 @@ def tool_skill(task, auto_install=True, scope="all"):
     return f"no local or remote skills found matching task: {task_str!r}"
 
 
-def tool_lint():
+def tool_lint(detail="detailed"):
+    concise = _check_detail(detail)
     lint = sibling("lint")  # lint imports hive, so load it lazily
-    return lint.format_report(lint.lint(VAULT))
+    findings = lint.lint(VAULT)
+    return lint.format_concise(findings) if concise else lint.format_report(findings)
 
 
 def tool_status():
@@ -1063,24 +1093,27 @@ TOOLS = {
                      "_memory.md, ADR list and, if a task is given, matching vault notes and ranked code-graph symbols.",
                      {"project": ("string", "Project slug: folder name under projects root, lowercased, spaces to hyphens"),
                       "task": ("string", "What you are about to do (optional, improves ranking)"),
-                      "budget": ("integer", "Max tokens to return (default 1500)")}, ["project"]),
+                      "budget": ("integer", "Max tokens to return (default 1500)"),
+                      "handoff": ("string", "Handoff id from `hive handoff write`; returns only that envelope, "
+                                            "budgeted by the writer's role")}, ["project"]),
     "hive_search": (tool_search,
                     "BM25 search over vault notes. Default scope is project-isolated ('project'); use scope='all' for cross-project.",
                     {"query": ("string", "Keywords"),
                      "project": ("string", "Project slug to filter/boost (optional)"),
                      "scope": ("string", "Search scope: 'project' (default, project + global) or 'all' (cross-project)"),
-                     "limit": ("integer", "Max hits (default 8)")}, ["query"]),
+                     "limit": ("integer", "Max hits (default 8)"), "detail": DETAIL_PROP}, ["query"]),
     "hive_graph": (tool_graph,
                    "Ranked code-graph neighbourhood from graphify (Personalized PageRank with hub dampening): "
                    "symbols with file:line, edges between them, related vault notes, and graph staleness.",
                    {"repo": ("string", "Repo folder name or slug under projects root, or a path"),
-                    "query": ("string", "Symbol names or keywords"), "limit": ("integer", "Max symbols (default 15)")},
+                    "query": ("string", "Symbol names or keywords"), "limit": ("integer", "Max symbols (default 15)"),
+                    "detail": DETAIL_PROP},
                    ["repo", "query"]),
     "hive_status": (tool_status, "Index size per project and freshness of each repo's code graph.", {}, []),
     "hive_lint": (tool_lint,
                   "Vault health against AGENTS.md rules: frontmatter, line caps, broken links, stale memory, "
                   "superseded ADRs without successor, ambiguous names, orphans. Run before session end after writing notes.",
-                  {}, []),
+                  {"detail": DETAIL_PROP}, []),
     "hive_skill": (tool_skill,
                    "Auto-select best skill for task, or discover and install from remote registry (find-skills).",
                    {"task": ("string", "Task description or user prompt (required)"),
@@ -1093,7 +1126,8 @@ def tool_list():
     tools = []
     for name, (_, desc, props, req) in TOOLS.items():
         schema = {"type": "object", "required": req,
-                  "properties": {k: {"type": t, "description": d} for k, (t, d) in props.items()},
+                  "properties": {k: {"type": t, "description": d, **(extra[0] if extra else {})}
+                                 for k, (t, d, *extra) in props.items()},
                   "additionalProperties": False}
         tool = {"name": name, "description": desc, "inputSchema": schema, "annotations": READ_ONLY}
         if name == "hive_context":  # every session starts with it: load upfront in Claude Code, rest stay deferred
@@ -1118,10 +1152,17 @@ def validate_tool_args(name, args):
             errors.append({"field": k, "expected": "none", "got": "unexpected",
                            "message": f"unexpected argument {k!r}; allowed: {sorted(props.keys())}"})
         else:
-            expected_type, _ = props[k]
+            expected_type, _, *extra = props[k]
             val = args[k]
             if val is not None:
-                if expected_type == "string" and not isinstance(val, str):
+                allowed = (extra[0] if extra else {}).get("enum")
+                if allowed and val not in allowed:
+                    errors.append({"field": k, "expected": "|".join(allowed), "got": str(val)[:40],
+                                   "message": f"argument {k!r} must be one of {allowed}, got {val!r}"})
+                elif k == "budget" and isinstance(val, int) and val < 0:  # same rule as mcp.rs
+                    errors.append({"field": k, "expected": ">= 0", "got": str(val),
+                                   "message": f"argument 'budget' must be >= 0, got {val}"})
+                elif expected_type == "string" and not isinstance(val, str):
                     errors.append({"field": k, "expected": "string", "got": type(val).__name__,
                                    "message": f"argument {k!r} must be string, got {type(val).__name__}"})
                 elif expected_type == "integer" and (isinstance(val, bool) or not isinstance(val, int)):
@@ -1182,7 +1223,12 @@ def handle(msg):
             error_msg = f"Invalid arguments for {name}: {'; '.join(e['message'] for e in arg_errors)}"
             return ok({"content": [{"type": "text", "text": error_msg}], "isError": True, "errorDetails": arg_errors})
         try:
+            if name in CONCISE_TOOLS and "detail" not in args:  # DETAIL-01: concise is the MCP default
+                args = {**args, "detail": "concise"}
             text = fn(**args)
+            if name != "hive_context":  # DETAIL-02: large output goes to the disposable artifact cache
+                import artifacts
+                text = artifacts.offload(text)
             return ok({"content": [{"type": "text", "text": text}], "isError": False})
         except Exception as exc:  # a tool failure goes back to the model, never kills the server
             print(f"hive: {name} failed: {exc!r}", file=sys.stderr)
@@ -1293,29 +1339,48 @@ def tool_quarantine(*args):
 
 def tool_codex(*args):
     """CODEX-02 CLI fallback: `codex write <project> <record.json>` -> immutable codices/<project>/ note."""
+    path, rec = _write_record("codex", args)
+    return f"codex: wrote {path} ({len(rec['dead_ends'])} dead-end traces)"
+
+
+def tool_handoff(*args):
+    """HAND-01 CLI fallback: `handoff write <project> <record.json>` -> immutable handoff envelope."""
+    import codex
+    path, rec = _write_record("handoff", args)
+    slug, budget, core = validate_slug(args[1]), codex.ROLE_BUDGET[rec["role"]], codex.core_tokens(rec)
+    if core > budget:
+        print(f"handoff: core is ~{core} tokens, over the {rec['role']} budget {budget}; the rest is dropped "
+              f"on read", file=sys.stderr)
+    rel = Path(path).relative_to(Path(VAULT)).as_posix()
+    return (f"handoff: wrote {rel} id={path.stem} role={rec['role']} core_tokens={core}/{budget} "
+            f"({len(rec['dead_ends'])} dead-end traces); receiver: hive_context(project=\"{slug}\", "
+            f"handoff=\"{path.stem}\")")
+
+
+def _write_record(kind, args):
+    """`<kind> write <project> <record.json>`: write a codex or handoff note, its traces and GOV-04 proposals."""
     import datetime
-    import sqlite3
     import ledger
     import codex
+    import traces
     if len(args) != 3 or args[0] != "write":
-        raise SystemExit("usage: hive codex write <project> <record.json>")
+        raise SystemExit(f"usage: hive {kind} write <project> <record.json>")
     try:
         rec = json.loads(Path(args[2]).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"codex: cannot read record: {exc}")
+        raise SystemExit(f"{kind}: cannot read record: {exc}")
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     db = open_db(DB_PATH)[0]  # heals a corrupt index
     try:
         with db:
             path = codex.write(VAULT, db, args[1], rec, ledger.resolve_agent(), ledger.resolve_session(),
-                               datetime.date.today().isoformat(), int(time.time()))
-            import traces
+                               datetime.date.today().isoformat(), int(time.time()), kind=kind)
             traces.propose(VAULT, db, validate_slug(args[1]), int(time.time()))  # GOV-04
     except ValueError as exc:
         raise SystemExit(str(exc))
     finally:
         db.close()
-    return f"codex: wrote {path} ({len(rec['dead_ends'])} dead-end traces)"
+    return path, rec
 
 
 def tool_trace(*args):
@@ -1549,12 +1614,22 @@ def main(argv=None):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex, "quarantine": tool_quarantine, "audit": tool_audit,
+        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex, "handoff": tool_handoff, "quarantine": tool_quarantine, "audit": tool_audit,
     }
     if cmd not in commands:
         print(__doc__)
         return 2
     sys.stdout.reconfigure(encoding="utf-8")
+    if cmd == "context":  # flags match the Rust CLI: context <project> [task] [--budget N] [--handoff ID]
+        import argparse
+        p = argparse.ArgumentParser(prog="hive context")
+        p.add_argument("project")
+        p.add_argument("task", nargs="?", default="")
+        p.add_argument("--budget", type=int, default=1500)
+        p.add_argument("--handoff", default="")
+        a = p.parse_args(rest)
+        print(tool_context(a.project, a.task, a.budget, a.handoff))
+        return 0
     print(commands[cmd](*rest))
     return 0
 

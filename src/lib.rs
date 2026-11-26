@@ -1,4 +1,5 @@
 pub mod ace;
+pub mod artifact;
 pub mod bench;
 pub mod codex;
 pub mod common;

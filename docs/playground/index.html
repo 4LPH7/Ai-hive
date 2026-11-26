@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hive Playground</title>
+<meta name="description" content="Play with Hive Mind's trace decay and quorum promotion rules in your browser.">
+<style>
+  :root {
+    --ink: #0b0f17; --ink2: #131a28; --line: #1f2a3d; --text: #e6edf7; --muted: #7d8ba6;
+    --amber: #f5a524; --gold: #ffd166; --orange: #ff7a1a; --cyan: #38bdf8; --violet: #a78bfa;
+    --green: #34d399; --rose: #fb7185;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--text); background: var(--ink);
+    font: 16px/1.55 "Segoe UI", Inter, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+    background-image:
+      radial-gradient(ellipse 70% 50% at 70% -10%, rgba(245,165,36,.18), transparent 60%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='54' height='31.18'%3E%3Cg fill='none' stroke='%23F5A524' stroke-opacity='.07'%3E%3Cpath d='M18 0 9 15.59-9 15.59-18 0-9-15.59 9-15.59Z'/%3E%3Cpath d='M72 0 63 15.59 45 15.59 36 0 45-15.59 63-15.59Z'/%3E%3Cpath d='M45 15.59 36 31.18 18 31.18 9 15.59 18 0 36 0Z'/%3E%3Cpath d='M18 31.18 9 46.77-9 46.77-18 31.18-9 15.59 9 15.59Z'/%3E%3Cpath d='M72 31.18 63 46.77 45 46.77 36 31.18 45 15.59 63 15.59Z'/%3E%3C/g%3E%3C/svg%3E");
+    min-height: 100vh;
+  }
+  main { max-width: 1040px; margin: 0 auto; padding: 48px 16px 80px; }
+  header h1 {
+    margin: 0; font-size: clamp(40px, 7vw, 72px); font-weight: 800; letter-spacing: .02em; line-height: 1.05;
+    background: linear-gradient(120deg, var(--gold), var(--amber) 55%, var(--orange));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 0 18px rgba(245,165,36,.35));
+  }
+  header p { color: var(--muted); max-width: 640px; margin: 12px 0 0; }
+  .pill { display: inline-flex; gap: 8px; align-items: center; padding: 4px 12px; border-radius: 99px;
+    border: 1px solid rgba(245,165,36,.45); background: rgba(245,165,36,.1); color: var(--gold);
+    font-size: 12px; font-weight: 700; letter-spacing: .12em; margin-bottom: 16px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: blink 1.6s infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+  section { margin-top: 40px; padding: 24px; border-radius: 20px; border: 1px solid var(--line);
+    background: linear-gradient(160deg, rgba(19,26,40,.92), rgba(11,15,23,.92)); }
+  h2 { margin: 0 0 4px; font-size: 13px; letter-spacing: .16em; color: var(--gold); text-transform: uppercase; }
+  h3 { margin: 0 0 16px; font-size: 24px; }
+  .lede { color: var(--muted); margin: 0 0 20px; }
+  code { font-family: var(--mono); font-size: .9em; color: var(--gold); }
+  .grid { display: grid; gap: 20px; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  svg.chart { width: 100%; height: auto; display: block; }
+  label.slider { display: block; font-size: 14px; color: var(--muted); margin-top: 14px; }
+  input[type=range] { width: 100%; accent-color: var(--amber); margin-top: 6px; }
+  .age { font-family: var(--mono); color: var(--text); font-size: 20px; }
+  .kinds { display: grid; gap: 10px; }
+  .kind { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 12px 14px; border-radius: 14px;
+    border: 1px solid var(--line); background: rgba(255,255,255,.02); transition: opacity .25s, border-color .25s; }
+  .kind .name { font-family: var(--mono); font-weight: 700; }
+  .kind .val { font-family: var(--mono); text-align: right; }
+  .bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 3px; transition: width .15s; }
+  .status { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+  .kind.hidden { opacity: .5; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+  select, button { font: inherit; color: var(--text); background: var(--ink2); border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 12px; }
+  button { cursor: pointer; font-weight: 600; transition: transform .1s, border-color .2s; }
+  button:hover { border-color: var(--amber); }
+  button:active { transform: scale(.97); }
+  button.primary { background: linear-gradient(120deg, var(--gold), var(--amber)); color: #1a1205; border: 0; }
+  .field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  .states { display: flex; gap: 8px; margin: 20px 0; flex-wrap: wrap; }
+  .state { flex: 1 1 120px; text-align: center; padding: 14px 8px; border-radius: 14px; border: 1px solid var(--line);
+    color: var(--muted); font-weight: 700; transition: all .35s; position: relative; }
+  .state small { display: block; font-weight: 400; font-size: 12px; margin-top: 2px; }
+  .state.on { color: #1a1205; border-color: transparent; transform: translateY(-3px); }
+  .state.on.scout { background: var(--cyan); }
+  .state.on.quorum { background: var(--amber); }
+  .state.on.canonical { background: var(--green); box-shadow: 0 0 28px rgba(52,211,153,.45); }
+  .ledger { font-family: var(--mono); font-size: 13px; max-height: 220px; overflow: auto; border-radius: 12px;
+    border: 1px solid var(--line); padding: 10px 12px; background: rgba(0,0,0,.25); }
+  .ledger div { padding: 2px 0; animation: in .3s; }
+  @keyframes in { from { opacity: 0; transform: translateX(-6px); } }
+  .meter { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+  .meter div { padding: 12px; border-radius: 12px; border: 1px solid var(--line); text-align: center; }
+  .meter b { display: block; font-size: 26px; font-family: var(--mono); color: var(--gold); }
+  .meter span { font-size: 12px; color: var(--muted); }
+  .verdict { margin-top: 14px; padding: 12px 14px; border-radius: 12px; border-left: 3px solid var(--amber);
+    background: rgba(245,165,36,.08); font-size: 14px; }
+  footer { margin-top: 40px; color: var(--muted); font-size: 14px; text-align: center; }
+  a { color: var(--gold); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="pill"><span class="dot"></span>HIVE MIND · PLAYGROUND</div>
+    <h1>Play with the hive.</h1>
+    <p>Two rules decide what every agent sees next session: <b>traces fade</b> on a half-life, and
+      <b>lessons need a quorum</b> of independent sessions before they reach <code>hive_context</code>.
+      Both simulators below run the same numbers as <code>traces.py</code> and <code>quorum.py</code>.</p>
+  </header>
+
+  <section aria-labelledby="t-title">
+    <h2>Stigmergy</h2>
+    <h3 id="t-title">Trace decay lab</h3>
+    <p class="lede">An agent leaves a trace; it weakens as <code>w₀ · 2^(−age / half-life)</code>. Below
+      <code>0.15</code> it leaves every read path; after 7 days it is purged.</p>
+    <div class="grid">
+      <div>
+        <svg class="chart" id="chart" viewBox="0 0 640 300" role="img" aria-label="Trace strength over time"></svg>
+        <label class="slider">Trace age <span class="age" id="ageOut">0 h</span>
+          <input id="age" type="range" min="0" max="180" step="1" value="10" aria-label="Trace age in hours">
+        </label>
+        <label class="slider">Starting weight w₀ <span class="age" id="w0Out">1.00</span>
+          <input id="w0" type="range" min="0.2" max="2" step="0.05" value="1" aria-label="Starting weight">
+        </label>
+      </div>
+      <div class="kinds" id="kinds"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="q-title">
+    <h2>Quorum sensing</h2>
+    <h3 id="q-title">Promotion lab</h3>
+    <p class="lede">A new playbook bullet starts as a <b>scout</b>. Evidence from <b>2+ distinct sessions</b> makes it a
+      <b>quorum</b> bullet; a score of <b>≥ 1.5</b> makes it <b>canonical</b>, the only state injected into agents.
+      Each session counts once, at its strongest evidence.</p>
+    <div class="controls">
+      <label class="field">Session
+        <select id="sess"><option>s-alpha</option><option>s-bravo</option><option>s-charlie</option><option>s-delta</option></select></label>
+      <label class="field">Evidence
+        <select id="ev"><option value="test_pass">test_pass · 1.0</option><option value="confirm">confirm · 1.0</option>
+          <option value="self_tag">self_tag · 0.35</option></select></label>
+      <label class="field">Contesting a canonical bullet scoring
+        <select id="inc"><option value="">no conflict</option><option value="0">0.0</option><option value="1.5">1.5</option>
+          <option value="2">2.0</option><option value="3">3.0</option></select></label>
+      <button class="primary" id="add">Add evidence</button>
+      <button id="reset">Reset</button>
+    </div>
+    <div class="states" id="states">
+      <div class="state scout">scout<small>hidden</small></div>
+      <div class="state quorum">quorum<small>hidden · 2+ sessions</small></div>
+      <div class="state canonical">canonical<small>injected</small></div>
+    </div>
+    <div class="grid">
+      <div class="ledger" id="ledger" aria-live="polite"><div style="color:var(--muted)">no evidence yet: add some</div></div>
+      <div>
+        <div class="meter">
+          <div><b id="mSess">0</b><span>sessions</span></div>
+          <div><b id="mScore">0.00</b><span>score</span></div>
+          <div><b id="mGate">1.50</b><span>gate</span></div>
+        </div>
+        <div class="verdict" id="verdict">Scouts are written but never injected.</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>Part of <a href="https://github.com/4LPH7/Hive_Mind">Hive Mind</a> · rules from
+    <code>traces.py</code> and <code>quorum.py</code> · runs fully offline</footer>
+</main>
+<script>
+(() => {
+  // ------------------------------------------------ trace decay (traces.py: KINDS, MIN_STRENGTH, PURGE_AFTER_SECS)
+  const KINDS = [["HOT_FILE", 12, "#f5a524"], ["DEAD_END", 24, "#fb7185"], ["RECENT_FIX", 48, "#34d399"]];
+  const MIN = 0.15, PURGE_H = 168, TMAX = 180;
+  const L = 44, R = 628, T = 16, B = 266;
+  const svg = document.getElementById("chart");
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs) => {
+    const n = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    svg.appendChild(n);
+    return n;
+  };
+  const age = document.getElementById("age"), w0In = document.getElementById("w0");
+  const kindsBox = document.getElementById("kinds");
+  const X = t => L + (R - L) * t / TMAX;
+  const strength = (w0, t, hl) => w0 * Math.pow(2, -t / hl);
+  let yMax = 2;
+  const Y = s => B - (B - T) * Math.min(s, yMax) / yMax;
+
+  const rows = KINDS.map(([name, hl, color]) => {
+    const d = document.createElement("div");
+    d.className = "kind";
+    d.innerHTML = `<span class="name" style="color:${color}">${name}</span><span class="val">0.00</span>
+      <div class="bar"><i style="background:${color}"></i></div><span class="status"></span>`;
+    kindsBox.appendChild(d);
+    return d;
+  });
+
+  function draw() {
+    const t = +age.value, w0 = +w0In.value;
+    yMax = Math.max(1, Math.ceil(w0 * 2) / 2);
+    svg.textContent = "";
+    for (let i = 0; i <= 4; i++) {
+      const s = yMax * i / 4;
+      el("line", { x1: L, x2: R, y1: Y(s), y2: Y(s), stroke: "#1f2a3d" });
+      el("text", { x: L - 8, y: Y(s) + 4, "text-anchor": "end", fill: "#7d8ba6", "font-size": 11, "font-family": "monospace" }).textContent = s.toFixed(2);
+    }
+    for (let h = 0; h <= TMAX; h += 24) {
+      el("text", { x: X(h), y: B + 20, "text-anchor": "middle", fill: "#7d8ba6", "font-size": 11, "font-family": "monospace" }).textContent = h + "h";
+    }
+    el("rect", { x: X(PURGE_H), y: T, width: R - X(PURGE_H), height: B - T, fill: "#fb7185", "fill-opacity": .08 });
+    el("text", { x: R - 4, y: T + 14, "text-anchor": "end", fill: "#fb7185", "font-size": 11 }).textContent = "purged";
+    el("line", { x1: L, x2: R, y1: Y(MIN), y2: Y(MIN), stroke: "#fb7185", "stroke-dasharray": "5 5" });
+    el("text", { x: L + 6, y: Y(MIN) - 6, fill: "#fb7185", "font-size": 11 }).textContent = "hidden below 0.15";
+    KINDS.forEach(([name, hl, color], i) => {
+      let pts = "";
+      for (let h = 0; h <= TMAX; h += 1) pts += `${X(h).toFixed(1)},${Y(strength(w0, h, hl)).toFixed(1)} `;
+      el("polyline", { points: pts, fill: "none", stroke: color, "stroke-width": 2.5, "stroke-linecap": "round" });
+      const s = strength(w0, t, hl);
+      el("circle", { cx: X(t), cy: Y(s), r: 5.5, fill: "#0b0f17", stroke: color, "stroke-width": 3 });
+      const visible = s >= MIN && t < PURGE_H;
+      const row = rows[i];
+      row.classList.toggle("hidden", !visible);
+      row.querySelector(".val").textContent = s.toFixed(2);
+      row.querySelector(".bar i").style.width = Math.min(100, s / yMax * 100) + "%";
+      const fadeAt = hl * Math.log2(w0 / MIN);
+      row.querySelector(".status").textContent = t >= PURGE_H ? "purged from hive.sqlite"
+        : visible ? `visible to agents · fades out at ${Math.max(0, fadeAt).toFixed(1)} h (t½ ${hl} h)`
+        : "hidden from hive_context and search";
+    });
+    el("line", { x1: X(t), x2: X(t), y1: T, y2: B, stroke: "#ffd166", "stroke-opacity": .6 });
+    document.getElementById("ageOut").textContent = `${t} h`;
+    document.getElementById("w0Out").textContent = w0.toFixed(2);
+  }
+  age.addEventListener("input", draw);
+  w0In.addEventListener("input", draw);
+  draw();
+
+  // ------------------------------------------------ quorum (quorum.py: WEIGHTS, PROMOTE_SCORE, PROMOTE_SESSIONS, CHALLENGE_MARGIN)
+  const WEIGHTS = { test_pass: 1.0, confirm: 1.0, self_tag: 0.35 };
+  const PROMOTE_SCORE = 1.5, PROMOTE_SESSIONS = 2, CHALLENGE_MARGIN = 1.0;
+  let evidence = [];
+  const $ = id => document.getElementById(id);
+
+  function evaluate() {
+    const best = {};
+    for (const e of evidence) best[e.session] = Math.max(best[e.session] || 0, WEIGHTS[e.kind]);
+    const sessions = Object.keys(best).length;
+    const score = Object.values(best).reduce((a, b) => a + b, 0);
+    const inc = $("inc").value;
+    const gate = inc === "" ? PROMOTE_SCORE : Math.max(PROMOTE_SCORE, Math.max(+inc, PROMOTE_SCORE) + CHALLENGE_MARGIN);
+    const state = sessions < PROMOTE_SESSIONS ? "scout" : score >= gate ? "canonical" : "quorum";
+    return { sessions, score, gate, state };
+  }
+
+  function render() {
+    const { sessions, score, gate, state } = evaluate();
+    document.querySelectorAll(".state").forEach(n => n.classList.toggle("on", n.classList.contains(state)));
+    $("mSess").textContent = sessions;
+    $("mScore").textContent = score.toFixed(2);
+    $("mGate").textContent = gate.toFixed(2);
+    const why = {
+      scout: sessions === 0 ? "Scouts are written but never injected." :
+        "One session is not independence: a scout needs a second, distinct session.",
+      quorum: `Two or more sessions agree, but score ${score.toFixed(2)} < gate ${gate.toFixed(2)}. Still hidden.`,
+      canonical: $("inc").value === "" ? "Canonical: hive_context now injects this bullet into every agent." :
+        "The challenger won: it is canonical and the old bullet drops back to quorum (kept, hidden).",
+    };
+    $("verdict").textContent = why[state];
+  }
+
+  $("add").addEventListener("click", () => {
+    const e = { session: $("sess").value, kind: $("ev").value };
+    evidence.push(e);
+    if (evidence.length === 1) $("ledger").textContent = "";
+    const row = document.createElement("div");
+    row.innerHTML = `<span style="color:#38bdf8">${e.session}</span> · ${e.kind} · ${WEIGHTS[e.kind].toFixed(2)}`;
+    $("ledger").prepend(row);
+    render();
+  });
+  $("reset").addEventListener("click", () => {
+    evidence = [];
+    $("ledger").innerHTML = '<div style="color:var(--muted)">no evidence yet: add some</div>';
+    render();
+  });
+  $("inc").addEventListener("change", render);
+  render();
+})();
+</script>
+</body>
+</html>

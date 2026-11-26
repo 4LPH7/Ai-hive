@@ -29,6 +29,8 @@ pub fn tool_list() -> Value {
         "idempotentHint": true,
         "openWorldHint": false
     });
+    let detail_prop = json!({"type": "string", "enum": ["concise", "detailed"],
+        "description": "concise (default): ids, file:line, one line each; detailed: full"});
 
     let tools = vec![
         json!({
@@ -40,7 +42,8 @@ pub fn tool_list() -> Value {
                 "properties": {
                     "project": {"type": "string", "description": "Project slug: folder name under projects root, lowercased, spaces to hyphens"},
                     "task": {"type": "string", "description": "What you are about to do (optional, improves ranking)"},
-                    "budget": {"type": "integer", "description": "Max tokens to return (default 1500)"}
+                    "budget": {"type": "integer", "description": "Max tokens to return (default 1500)"},
+                    "handoff": {"type": "string", "description": "Handoff id from `hive handoff write`; returns only that envelope, budgeted by the writer's role"}
                 },
                 "additionalProperties": false
             },
@@ -57,7 +60,8 @@ pub fn tool_list() -> Value {
                     "query": {"type": "string", "description": "Keywords"},
                     "project": {"type": "string", "description": "Project slug to filter/boost (optional)"},
                     "scope": {"type": "string", "description": "Search scope: 'project' (default, project + global) or 'all' (cross-project)"},
-                    "limit": {"type": "integer", "description": "Max hits (default 8)"}
+                    "limit": {"type": "integer", "description": "Max hits (default 8)"},
+                    "detail": detail_prop
                 },
                 "additionalProperties": false
             },
@@ -72,7 +76,8 @@ pub fn tool_list() -> Value {
                 "properties": {
                     "repo": {"type": "string", "description": "Repo folder name or slug under projects root, or a path"},
                     "query": {"type": "string", "description": "Symbol names or keywords"},
-                    "limit": {"type": "integer", "description": "Max symbols (default 15)"}
+                    "limit": {"type": "integer", "description": "Max symbols (default 15)"},
+                    "detail": detail_prop
                 },
                 "additionalProperties": false
             },
@@ -95,7 +100,7 @@ pub fn tool_list() -> Value {
             "inputSchema": {
                 "type": "object",
                 "required": [],
-                "properties": {},
+                "properties": {"detail": detail_prop},
                 "additionalProperties": false
             },
             "annotations": read_only
@@ -120,6 +125,21 @@ pub fn tool_list() -> Value {
     json!(tools)
 }
 
+/// DETAIL-01: MCP responses of hive_search/graph/lint default to concise; tool_* and the CLI stay detailed.
+fn check_detail(v: &Value) -> Result<(), String> {
+    match v.as_str() {
+        Some("concise" | "detailed") => Ok(()),
+        _ => Err(format!(
+            "argument 'detail' must be one of [\"concise\", \"detailed\"], got {v}"
+        )),
+    }
+}
+
+/// `detail` from MCP args; concise unless the caller asks for detailed.
+fn is_concise(args: &Value) -> bool {
+    args.get("detail").and_then(|v| v.as_str()) != Some("detailed")
+}
+
 pub fn validate_tool_args(name: &str, args: &Value) -> Result<(), String> {
     let obj = args.as_object().ok_or_else(|| {
         format!(
@@ -140,19 +160,22 @@ pub fn validate_tool_args(name: &str, args: &Value) -> Result<(), String> {
                             return Err("argument 'project' must be string".to_string());
                         }
                     }
-                    "task" => {
+                    "task" | "handoff" => {
                         if !v.is_string() {
-                            return Err("argument 'task' must be string".to_string());
+                            return Err(format!("argument '{k}' must be string"));
                         }
                     }
                     "budget" => {
                         if !v.is_i64() && !v.is_u64() {
                             return Err("argument 'budget' must be integer".to_string());
                         }
+                        if v.as_i64().is_some_and(|b| b < 0) {
+                            return Err(format!("argument 'budget' must be >= 0, got {v}"));
+                        }
                     }
                     other => {
                         return Err(format!(
-                            "unexpected argument {:?}; allowed: [\"budget\", \"project\", \"task\"]",
+                            "unexpected argument {:?}; allowed: [\"budget\", \"handoff\", \"project\", \"task\"]",
                             other
                         ));
                     }
@@ -185,9 +208,10 @@ pub fn validate_tool_args(name: &str, args: &Value) -> Result<(), String> {
                             return Err("argument 'limit' must be integer".to_string());
                         }
                     }
+                    "detail" => check_detail(v)?,
                     other => {
                         return Err(format!(
-                            "unexpected argument {:?}; allowed: [\"limit\", \"project\", \"query\", \"scope\"]",
+                            "unexpected argument {:?}; allowed: [\"detail\", \"limit\", \"project\", \"query\", \"scope\"]",
                             other
                         ));
                     }
@@ -218,19 +242,33 @@ pub fn validate_tool_args(name: &str, args: &Value) -> Result<(), String> {
                             return Err("argument 'limit' must be integer".to_string());
                         }
                     }
+                    "detail" => check_detail(v)?,
                     other => {
                         return Err(format!(
-                            "unexpected argument {:?}; allowed: [\"limit\", \"query\", \"repo\"]",
+                            "unexpected argument {:?}; allowed: [\"detail\", \"limit\", \"query\", \"repo\"]",
                             other
                         ));
                     }
                 }
             }
         }
-        "hive_status" | "hive_lint" => {
+        "hive_status" => {
             if !obj.is_empty() {
                 let first_key = obj.keys().next().unwrap();
                 return Err(format!("unexpected argument {:?}; allowed: []", first_key));
+            }
+        }
+        "hive_lint" => {
+            for (k, v) in obj {
+                match k.as_str() {
+                    "detail" => check_detail(v)?,
+                    other => {
+                        return Err(format!(
+                            "unexpected argument {:?}; allowed: [\"detail\"]",
+                            other
+                        ))
+                    }
+                }
             }
         }
         "hive_skill" => {
@@ -341,6 +379,7 @@ pub fn tool_graph(
     repo: &str,
     query: &str,
     limit: usize,
+    concise: bool,
 ) -> Result<String, String> {
     let d = repo_dir(repo).ok_or_else(|| {
         format!(
@@ -379,6 +418,18 @@ pub fn tool_graph(
         ),
         String::new(),
     ];
+
+    if concise {
+        // DETAIL-01: no community tags, edges or vault notes (labels are whitespace-collapsed by fmt_node)
+        for (nid, _, is_seed) in &ranked {
+            let line = fmt_node(&g.nodes[nid], *is_seed);
+            lines.push(match line.rsplit_once("  [") {
+                Some((head, _)) => head.to_string(),
+                None => line,
+            });
+        }
+        return Ok(lines.join("\n"));
+    }
 
     for (nid, _, is_seed) in &ranked {
         lines.push(fmt_node(&g.nodes[nid], *is_seed));
@@ -432,8 +483,26 @@ pub fn tool_context(
     project: &str,
     task: &str,
     budget: usize,
+    handoff: &str,
 ) -> Result<String, String> {
     let slug = validate_slug(project)?;
+    if !handoff.is_empty() {
+        // HAND-01: a receiving agent asked for one envelope; return only that
+        let t0 = std::time::Instant::now();
+        let view = crate::codex::handoff_view(&idx.vault, &slug, handoff, budget)?;
+        let _ = crate::ledger::record(
+            &crate::ledger::default_ledger_path(),
+            "context",
+            &slug,
+            &format!("handoff {handoff}"),
+            &[format!("codices/{slug}/{handoff}.md")],
+            &[],
+            t0.elapsed().as_secs_f64() * 1000.0,
+            None,
+            None,
+        );
+        return Ok(view);
+    }
 
     // 1. Memory Section
     let mut mem_parts = Vec::new();
@@ -456,16 +525,8 @@ pub fn tool_context(
     let memory_text = idx.note(&mem_rel);
     if !memory_text.is_empty() {
         let (meta, _, body) = parse_note(&memory_text);
-        let agent = meta.get("agent").map(|s| s.as_str()).unwrap_or("unknown");
-        let source = meta.get("source").map(|s| s.as_str()).unwrap_or("unknown");
-        let updated = meta.get("updated").map(|s| s.as_str()).unwrap_or("");
-        let age = note_age(updated);
-        let header = format!(
-            "> [!NOTE] Untrusted vault note: path=\"{}\", agent=\"{}\", source=\"{}\", age=\"{}\"",
-            mem_rel, agent, source, age
-        );
-        let quoted_body: Vec<String> = body.trim().lines().map(|l| format!("> {}", l)).collect();
-        let framed_body = format!("{}\n{}", header, quoted_body.join("\n"));
+        let age = note_age(meta.get("updated").map(|s| s.as_str()).unwrap_or(""));
+        let framed_body = crate::common::frame_untrusted(&mem_rel, &meta, &body);
         mem_parts.push(format!("## {} ({})\n{}", mem_rel, age, framed_body));
     } else {
         mem_parts.push(format!(
@@ -531,7 +592,7 @@ pub fn tool_context(
             }
         }
 
-        match tool_graph(idx, &slug, task, 12) {
+        match tool_graph(idx, &slug, task, 12, false) {
             Ok(res) => {
                 code_graph_section = format!("## code graph for this task\n{}", res);
             }
@@ -792,7 +853,11 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                         .get("budget")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(1500) as usize;
-                    tool_context(idx, project, task, budget)
+                    let handoff = tool_args
+                        .get("handoff")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    tool_context(idx, project, task, budget, handoff)
                 }
                 "hive_search" => {
                     let query = tool_args
@@ -816,6 +881,15 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                         Ok(hits) => {
                             if hits.is_empty() {
                                 Ok("no matching notes".to_string())
+                            } else if is_concise(tool_args) {
+                                let lines: Vec<String> = hits
+                                    .into_iter()
+                                    .map(|h| {
+                                        let title: String = h.title.chars().take(80).collect();
+                                        format!("- {} ({}) {}", h.path, h.r#type, title)
+                                    })
+                                    .collect();
+                                Ok(lines.join("\n"))
                             } else {
                                 let lines: Vec<String> = hits
                                     .into_iter()
@@ -847,7 +921,7 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                         .get("limit")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(15) as usize;
-                    tool_graph(idx, repo, query, limit)
+                    tool_graph(idx, repo, query, limit, is_concise(tool_args))
                 }
                 "hive_status" => {
                     let _ = idx.refresh(true);
@@ -866,7 +940,11 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                 }
                 "hive_lint" => {
                     let findings = lint(&idx.vault, None);
-                    Ok(format_report(&findings))
+                    if is_concise(tool_args) {
+                        Ok(crate::lint::format_concise(&findings))
+                    } else {
+                        Ok(format_report(&findings))
+                    }
                 }
                 "hive_skill" => {
                     let task = tool_args.get("task").and_then(|v| v.as_str()).unwrap_or("");
@@ -883,6 +961,14 @@ pub fn handle_rpc(idx: &mut Index, req: &Value) -> Option<Value> {
                 other => Err(format!("tool {:?} not found", other)),
             };
 
+            // DETAIL-02: large results go to the disposable artifact cache; errors and hive_context never do
+            let call_res = call_res.map(|text| {
+                if tool_name == "hive_context" {
+                    text
+                } else {
+                    crate::artifact::offload(&text, &[&idx.vault, &default_projects()])
+                }
+            });
             match call_res {
                 Ok(content) => Some(json!({
                     "jsonrpc": "2.0",
@@ -995,5 +1081,61 @@ mod tests {
             validate_tool_args("hive_context", &json!({"project": "ai-hive", "extra": 123}))
                 .is_err()
         );
+        assert!(validate_tool_args(
+            "hive_context",
+            &json!({"project": "ai-hive", "handoff": "2026-11-25-00000000"})
+        )
+        .is_ok());
+        assert!(
+            validate_tool_args("hive_context", &json!({"project": "ai-hive", "handoff": 1}))
+                .is_err()
+        );
+        assert!(
+            validate_tool_args("hive_context", &json!({"project": "ai-hive", "budget": -1}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_detail_validation_and_schema() {
+        for (name, base) in [
+            ("hive_search", json!({"query": "q"})),
+            ("hive_graph", json!({"repo": "r", "query": "q"})),
+            ("hive_lint", json!({})),
+        ] {
+            for (detail, ok) in [
+                (json!("concise"), true),
+                (json!("detailed"), true),
+                (json!("full"), false),
+                (json!(1), false),
+            ] {
+                let mut args = base.clone();
+                args["detail"] = detail.clone();
+                assert_eq!(
+                    validate_tool_args(name, &args).is_ok(),
+                    ok,
+                    "{name} {detail}"
+                );
+            }
+        }
+        assert!(validate_tool_args("hive_lint", &json!({"other": 1})).is_err());
+        assert!(validate_tool_args("hive_status", &json!({"detail": "concise"})).is_err());
+        assert!(is_concise(&json!({})) && is_concise(&json!({"detail": "concise"})));
+        assert!(!is_concise(&json!({"detail": "detailed"})));
+        let tools = tool_list();
+        let tools = tools.as_array().unwrap();
+        assert_eq!(tools.len(), 6);
+        for t in tools {
+            let props = &t["inputSchema"]["properties"];
+            let has = matches!(
+                t["name"].as_str(),
+                Some("hive_search" | "hive_graph" | "hive_lint")
+            );
+            assert_eq!(props.get("detail").is_some(), has, "{}", t["name"]);
+            if has {
+                assert_eq!(props["detail"]["enum"], json!(["concise", "detailed"]));
+            }
+        }
+        assert!(tools[0]["inputSchema"]["properties"]["handoff"].is_object());
     }
 }

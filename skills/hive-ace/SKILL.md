@@ -71,6 +71,21 @@ Every field is required; use `[]` or `""` when empty. Write facts only, no secre
  "open_threads": ["unfinished work or questions for the next session"]}
 ```
 
+Persist it with `hive codex write <slug> <record.json>`.
+
+**Handing work to another agent** (Claude to Codex, implementer to reviewer): add 4 keys to the same record
+and write it with `hive handoff write <slug> <record.json>` instead. All 10 keys are required.
+
+```json
+{"status": "SUCCESS | PARTIAL | ERROR",
+ "role": "implementer | reviewer | verifier (your role; sets the reader's token budget)",
+ "completed_plan_items": ["plan steps finished this session"],
+ "artifact_paths": ["repo-relative paths or artifact:<sha256> from an offloaded MCP result"]}
+```
+
+At most 6 dead ends and 6 artifact paths (each 200 chars or fewer); they are never truncated on read. The
+command prints the id; tell the receiver to call `hive_context(project="<slug>", handoff="<id>")`.
+
 ## 5. Finish
 
 One line to the user: what you added or tagged (ids) and the checkpoint record path. Then continue or end

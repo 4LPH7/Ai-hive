@@ -574,9 +574,61 @@ pub fn format_report(findings: &[Finding]) -> String {
     lines.join("\n")
 }
 
+/// DETAIL-01: the head line, every ERROR row verbatim, one `{SEV} {code} x{n}` line per WARN/INFO code.
+/// Mirrors `lint.format_concise`: rows sort by severity then code (then path for ERROR rows).
+pub fn format_concise(findings: &[Finding]) -> String {
+    let report = format_report(findings);
+    let head = report.lines().next().unwrap_or_default().to_string();
+    let sev = |s: &str| match s {
+        "ERROR" => 0,
+        "WARN" => 1,
+        _ => 2,
+    };
+    let mut errors: Vec<&Finding> = findings.iter().filter(|f| f.severity == "ERROR").collect();
+    errors.sort_by(|a, b| a.code.cmp(&b.code).then_with(|| a.path.cmp(&b.path)));
+    let mut counts: std::collections::BTreeMap<(u8, &str, &str), usize> = Default::default();
+    for f in findings.iter().filter(|f| f.severity != "ERROR") {
+        *counts
+            .entry((sev(&f.severity), f.severity.as_str(), f.code.as_str()))
+            .or_default() += 1;
+    }
+    let mut lines = vec![head];
+    lines.extend(
+        errors
+            .iter()
+            .map(|f| format!("{:5} {:20} {}: {}", f.severity, f.code, f.path, f.message)),
+    );
+    lines.extend(counts.iter().map(|((_, s, c), n)| format!("{s} {c} x{n}")));
+    if !counts.is_empty() {
+        lines.push("detail=\"detailed\" lists every finding".to_string());
+    }
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_concise_collapses_warn_and_info() {
+        let f = |s: &str, c: &str, p: &str| Finding {
+            severity: s.into(),
+            code: c.into(),
+            path: p.into(),
+            message: "m".into(),
+        };
+        let findings = vec![
+            f("ERROR", "frontmatter-missing", "b.md"),
+            f("WARN", "broken-link", "a.md"),
+            f("INFO", "orphan", "a.md"),
+            f("INFO", "orphan", "c.md"),
+        ];
+        assert_eq!(
+            format_concise(&findings),
+            "lint: 1 error, 1 warn, 2 info\nERROR frontmatter-missing  b.md: m\nWARN broken-link x1\nINFO orphan x2\ndetail=\"detailed\" lists every finding"
+        );
+        assert_eq!(format_concise(&[]), "lint: 0 error, 0 warn, 0 info");
+    }
 
     #[test]
     fn test_secret_detection_in_lint() {

@@ -39,4 +39,4 @@ day it was introduced, so the existing history does not light up with warnings.
 ## Changing the rules
 
 Constants at the top of `lint.py`: `ALLOWED`, `REQUIRED`, `LINE_CAPS`, `MEMORY_CAP`, `STALE_DAYS`,
-`CONVENTIONAL_NAMES`, `SOURCE_RULE_FROM`. Add a test in `test_lint.py` first.
+`CONVENTIONAL_NAMES`, `SOURCE_RULE_FROM`. Add a test in `tests/python/test_lint.py` first.

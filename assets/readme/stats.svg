@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 200" width="1200" height="200" role="img">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0B0F17"/><stop offset="1" stop-color="#131A28"/>
+  </linearGradient>
+  <linearGradient id="honey" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFD166"/><stop offset=".55" stop-color="#F5A524"/><stop offset="1" stop-color="#FF7A1A"/>
+  </linearGradient>
+  <pattern id="hex" width="54" height="31.18" patternUnits="userSpaceOnUse">
+    <g fill="none" stroke="#F5A524" stroke-opacity=".09" stroke-width="1"><path d="M18.0,0.0 L9.0,15.6 L-9.0,15.6 L-18.0,0.0 L-9.0,-15.6 L9.0,-15.6 Z"/><path d="M72.0,0.0 L63.0,15.6 L45.0,15.6 L36.0,0.0 L45.0,-15.6 L63.0,-15.6 Z"/><path d="M45.0,15.6 L36.0,31.2 L18.0,31.2 L9.0,15.6 L18.0,0.0 L36.0,0.0 Z"/><path d="M18.0,31.2 L9.0,46.8 L-9.0,46.8 L-18.0,31.2 L-9.0,15.6 L9.0,15.6 Z"/><path d="M72.0,31.2 L63.0,46.8 L45.0,46.8 L36.0,31.2 L45.0,15.6 L63.0,15.6 Z"/></g>
+  </pattern>
+  <pattern id="hexlit" width="54" height="31.18" patternUnits="userSpaceOnUse">
+    <g fill="none" stroke="#FFD166" stroke-opacity=".55" stroke-width="1.2"><path d="M18.0,0.0 L9.0,15.6 L-9.0,15.6 L-18.0,0.0 L-9.0,-15.6 L9.0,-15.6 Z"/><path d="M72.0,0.0 L63.0,15.6 L45.0,15.6 L36.0,0.0 L45.0,-15.6 L63.0,-15.6 Z"/><path d="M45.0,15.6 L36.0,31.2 L18.0,31.2 L9.0,15.6 L18.0,0.0 L36.0,0.0 Z"/><path d="M18.0,31.2 L9.0,46.8 L-9.0,46.8 L-18.0,31.2 L-9.0,15.6 L9.0,15.6 Z"/><path d="M72.0,31.2 L63.0,46.8 L45.0,46.8 L36.0,31.2 L45.0,15.6 L63.0,15.6 Z"/></g>
+  </pattern>
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="18"/></filter>
+  <clipPath id="card"><rect width="1200" height="200" rx="22"/></clipPath>
+</defs>
+<g clip-path="url(#card)">
+  <rect width="1200" height="200" fill="url(#bg)"/>
+  <rect width="1200" height="200" fill="url(#hex)"/>
+  <g font-family="'Segoe UI', Inter, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" opacity="0">
+    <animate attributeName="opacity" from="0" to="1" begin="0.00s" dur=".6s" fill="freeze"/>
+    <animateTransform attributeName="transform" type="translate" from="0 18" to="0 0" begin="0.00s" dur=".6s" fill="freeze"/>
+    <rect x="40" y="30" width="262" height="140" rx="16" fill="#FF7A1A" fill-opacity=".07" stroke="#FF7A1A" stroke-opacity=".35"/>
+    <text x="62" y="88" font-size="40" font-weight="800" fill="#FF7A1A">&lt;1 ms</text>
+    <text x="62" y="118" font-size="16" font-weight="700" fill="#E6EDF7">cold start</text>
+    <text x="62" y="142" font-family="'Cascadia Code', 'JetBrains Mono', Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#7D8BA6">native Rust binary</text>
+    <rect x="62" y="154" height="3" rx="1.5" width="0" fill="#FF7A1A">
+      <animate attributeName="width" from="0" to="218" begin="0.40s" dur="1.1s" fill="freeze"/></rect>
+  </g>
+  <g font-family="'Segoe UI', Inter, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" opacity="0">
+    <animate attributeName="opacity" from="0" to="1" begin="0.25s" dur=".6s" fill="freeze"/>
+    <animateTransform attributeName="transform" type="translate" from="0 18" to="0 0" begin="0.25s" dur=".6s" fill="freeze"/>
+    <rect x="324" y="30" width="262" height="140" rx="16" fill="#38BDF8" fill-opacity=".07" stroke="#38BDF8" stroke-opacity=".35"/>
+    <text x="346" y="88" font-size="40" font-weight="800" fill="#38BDF8">~4 ms</text>
+    <text x="346" y="118" font-size="16" font-weight="700" fill="#E6EDF7">vault search</text>
+    <text x="346" y="142" font-family="'Cascadia Code', 'JetBrains Mono', Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#7D8BA6">SQLite FTS5 · BM25</text>
+    <rect x="346" y="154" height="3" rx="1.5" width="0" fill="#38BDF8">
+      <animate attributeName="width" from="0" to="218" begin="0.65s" dur="1.1s" fill="freeze"/></rect>
+  </g>
+  <g font-family="'Segoe UI', Inter, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" opacity="0">
+    <animate attributeName="opacity" from="0" to="1" begin="0.50s" dur=".6s" fill="freeze"/>
+    <animateTransform attributeName="transform" type="translate" from="0 18" to="0 0" begin="0.50s" dur=".6s" fill="freeze"/>
+    <rect x="608" y="30" width="262" height="140" rx="16" fill="#34D399" fill-opacity=".07" stroke="#34D399" stroke-opacity=".35"/>
+    <text x="630" y="88" font-size="40" font-weight="800" fill="#34D399">30 / 30</text>
+    <text x="630" y="118" font-size="16" font-weight="700" fill="#E6EDF7">Recall@5</text>
+    <text x="630" y="142" font-family="'Cascadia Code', 'JetBrains Mono', Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#7D8BA6">golden eval · MRR 0.850</text>
+    <rect x="630" y="154" height="3" rx="1.5" width="0" fill="#34D399">
+      <animate attributeName="width" from="0" to="218" begin="0.90s" dur="1.1s" fill="freeze"/></rect>
+  </g>
+  <g font-family="'Segoe UI', Inter, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" opacity="0">
+    <animate attributeName="opacity" from="0" to="1" begin="0.75s" dur=".6s" fill="freeze"/>
+    <animateTransform attributeName="transform" type="translate" from="0 18" to="0 0" begin="0.75s" dur=".6s" fill="freeze"/>
+    <rect x="892" y="30" width="262" height="140" rx="16" fill="#A78BFA" fill-opacity=".07" stroke="#A78BFA" stroke-opacity=".35"/>
+    <text x="914" y="88" font-size="40" font-weight="800" fill="#A78BFA">6 tools</text>
+    <text x="914" y="118" font-size="16" font-weight="700" fill="#E6EDF7">read-only MCP</text>
+    <text x="914" y="142" font-family="'Cascadia Code', 'JetBrains Mono', Consolas, 'SF Mono', Menlo, monospace" font-size="12.5" fill="#7D8BA6">stdio · zero open ports</text>
+    <rect x="914" y="154" height="3" rx="1.5" width="0" fill="#A78BFA">
+      <animate attributeName="width" from="0" to="218" begin="1.15s" dur="1.1s" fill="freeze"/></rect>
+  </g>
+</g>
+<rect x=".5" y=".5" width="1199" height="199" rx="22" fill="none" stroke="#1F2A3D"/>
+</svg>

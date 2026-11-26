@@ -8,7 +8,7 @@ import skill
 class SkillGoldenEvalTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        golden_file = Path(__file__).resolve().parent / "skill_golden.json"
+        golden_file = Path(__file__).resolve().parents[2] / "skill_golden.json"
         with open(golden_file, encoding="utf-8") as f:
             cls.cases = json.load(f)
         cls.skills = skill.scan_skills()
