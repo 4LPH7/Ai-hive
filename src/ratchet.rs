@@ -273,6 +273,88 @@ pub fn staged_violations(vault: &Path, repo: &Path) -> Vec<(String, usize, Rule)
     out
 }
 
+// ---------------------------------------------------------------- RATCHET-03 release
+/// A canonical lesson injected into >= RELEASE_SESSIONS distinct real sessions that never earned a helpful tag
+/// (and has no shipped rule) is proposed for retirement; the human applies `{"remove": [id]}`. Mirror of
+/// `ratchet.propose_release`.
+pub const RELEASE_SESSIONS: usize = 20;
+
+/// {bullet id: {session ids}} from `context` ledger events (global: every project; a project: its own);
+/// anonymous per-process ids never count.
+pub fn injection_sessions(
+    entries: &[crate::ledger::LedgerEntry],
+    scope: &str,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let mut out: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        Default::default();
+    for e in entries {
+        if e.event != "context" || (scope != "global" && e.project != scope) {
+            continue;
+        }
+        if e.session_id.is_empty() || e.session_id.starts_with("proc-") {
+            continue;
+        }
+        for b in &e.injected_bullets {
+            out.entry(b.clone())
+                .or_default()
+                .insert(e.session_id.clone());
+        }
+    }
+    out
+}
+
+/// Write `inbox/retire-<scope>-<id>.md` per candidate (existing proposals kept); returns written paths.
+pub fn propose_release(
+    vault: &Path,
+    scopes: &[String],
+    entries: &[crate::ledger::LedgerEntry],
+    agent: &str,
+    session: &str,
+    today: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let rules = load_rules(vault);
+    let mut written = Vec::new();
+    for scope in scopes {
+        let meta = crate::quorum::load(&crate::quorum::meta_path(&crate::ace::scope_path(
+            vault, scope,
+        )?));
+        let sessions = injection_sessions(entries, scope);
+        let mut bullets: Vec<crate::ace::Bullet> = crate::ace::load(vault, scope)?
+            .into_values()
+            .flatten()
+            .collect();
+        bullets.sort_by(|a, b| a.id.cmp(&b.id));
+        for b in bullets {
+            let n = sessions.get(&b.id).map_or(0, |s| s.len());
+            if crate::quorum::state_of(&meta, &b.id) != "canonical"
+                || b.helpful != 0
+                || retired(&rules, scope, &b.id)
+                || n < RELEASE_SESSIONS
+            {
+                continue;
+            }
+            let path = vault
+                .join("inbox")
+                .join(format!("retire-{scope}-{}.md", b.id));
+            if path.exists() {
+                continue;
+            }
+            std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::write(
+                &path,
+                format!(
+                    "---\ntype: note\nproject: {scope}\nagent: {agent}\nstatus: active\nupdated: {today}\nsource: session {session}\n---\n# Retire proposal: {id}\n\nCanonical lesson ({scope}) injected into {n} sessions, never tagged helpful: {content}\n\nRetire (human): write `{{\"remove\": [\"{id}\"]}}` to a file and run `hive ace apply {scope} <file>`. Keep it by tagging it helpful once it earns its place.\n",
+                    id = b.id,
+                    content = b.content
+                ),
+            )
+            .map_err(|e| e.to_string())?;
+            written.push(path);
+        }
+    }
+    Ok(written)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +374,61 @@ mod tests {
         assert!(!glob_match("a.rs", "**/*.py") && glob_match("x", ""));
         assert!(exempt("_meta/playbook.md") && exempt("projects/demo/playbook.md"));
         assert!(!exempt("projects/demo/notes/playbook.md") && !exempt("notes/a.md"));
+    }
+
+    /// RATCHET-03 parity with tests/python/test_ratchet.py RatchetReleaseTest.
+    #[test]
+    fn test_release_proposes_only_never_helpful_heavily_injected() {
+        let vault = std::env::temp_dir().join(format!("hive-ratchet-rel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&vault);
+        let pb = crate::ace::scope_path(&vault, "global").unwrap();
+        std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
+        std::fs::write(
+            &pb,
+            "## strategies\n- [str-00001] seen=30 helpful=0 harmful=0 :: never helped lesson\n- [str-00002] seen=30 helpful=3 harmful=0 :: helped lesson\n- [str-00003] seen=5 helpful=0 harmful=0 :: rarely injected lesson\n",
+        )
+        .unwrap();
+        let entry = |event: &str, session: String, bullets: &[&str]| crate::ledger::LedgerEntry {
+            ts: String::new(),
+            session_id: session,
+            agent: "claude".into(),
+            project: "demo".into(),
+            event: event.into(),
+            query: String::new(),
+            hits: Vec::new(),
+            injected_bullets: bullets.iter().map(|b| b.to_string()).collect(),
+            duration_ms: 0.0,
+            repo_sha: String::new(),
+            content_sha256: String::new(),
+        };
+        let mut entries: Vec<_> = (0..20)
+            .map(|i| {
+                let mut b = vec!["str-00001", "str-00002"];
+                if i < 5 {
+                    b.push("str-00003");
+                }
+                entry("context", format!("s{i}"), &b)
+            })
+            .collect();
+        entries.extend((0..30).map(|i| entry("context", format!("proc-{i}"), &["str-00003"])));
+        entries.push(entry("query", "q1".into(), &["str-00003"]));
+        let scopes = vec!["global".to_string()];
+        let written =
+            propose_release(&vault, &scopes, &entries, "claude", "s1", "2026-11-26").unwrap();
+        assert_eq!(written.len(), 1);
+        assert!(written[0].ends_with("retire-global-str-00001.md"));
+        let note = std::fs::read_to_string(&written[0]).unwrap();
+        assert!(
+            note.contains("injected into 20 sessions")
+                && note.contains(r#"{"remove": ["str-00001"]}"#)
+        );
+        assert!(
+            propose_release(&vault, &scopes, &entries, "claude", "s1", "2026-11-26")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(injection_sessions(&entries, "other-project").is_empty());
+        let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]

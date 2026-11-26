@@ -167,5 +167,64 @@ class RatchetGateTest(unittest.TestCase):
         self.assertEqual([(p, line, r["id"]) for p, line, r in bad], [("tool.py", 3, "rat-global-cmd-00003")])
 
 
+class RatchetReleaseTest(unittest.TestCase):
+    """RATCHET-03: canonical lessons injected in >= 20 sessions with no helpful tag are proposed for retirement."""
+
+    def setUp(self):
+        import hive
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name)
+        self.ledger = self.vault / "ledger.jsonl"
+        self.patches = [mock.patch.object(ace, "VAULT", self.vault), mock.patch.object(hive, "VAULT", self.vault),
+                        mock.patch.object(hive, "LEDGER_PATH", self.ledger),
+                        mock.patch.dict("os.environ", {"HIVE_SESSION_ID": "sess-a", "HIVE_AGENT": "claude"})]
+        for p in self.patches:
+            p.start()
+        pb = ace.scope_path("global")
+        pb.parent.mkdir(parents=True)
+        pb.write_text("## strategies\n- [str-00001] seen=30 helpful=0 harmful=0 :: never helped lesson\n"
+                      "- [str-00002] seen=30 helpful=3 harmful=0 :: helped lesson\n"
+                      "- [str-00003] seen=5 helpful=0 harmful=0 :: rarely injected lesson\n", encoding="utf-8")
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def write_ledger(self):
+        import json
+        rows = [{"event": "context", "project": "demo", "session_id": f"s{i}",
+                 "injected_bullets": ["str-00001", "str-00002"] + (["str-00003"] if i < 5 else [])} for i in range(20)]
+        rows += [{"event": "context", "project": "demo", "session_id": f"proc-{i}", "injected_bullets": ["str-00003"]}
+                 for i in range(30)]  # anonymous per-process ids never count
+        rows.append({"event": "query", "project": "demo", "session_id": "q1", "injected_bullets": ["str-00003"]})
+        self.ledger.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+    def test_only_never_helpful_heavily_injected_canonical_lessons_are_proposed(self):
+        import hive
+        import ratchet
+        self.write_ledger()
+        out = hive.tool_ratchet("release")
+        self.assertIn("retire-global-str-00001.md", out)
+        self.assertNotIn("str-00002", out)
+        self.assertNotIn("str-00003", out)
+        note = (self.vault / "inbox" / "retire-global-str-00001.md").read_text(encoding="utf-8")
+        self.assertIn("injected into 20 sessions", note)
+        self.assertIn('{"remove": ["str-00001"]}', note)
+        self.assertIn("no release candidates", hive.tool_ratchet("release"), "an open proposal is not redrafted")
+        sessions = ratchet.injection_sessions(ratchet_entries(self.ledger), "other-project")
+        self.assertEqual(sessions, {}, "a project scope only counts its own context events")
+
+    def test_below_threshold_is_not_proposed(self):
+        import hive
+        self.ledger.write_text("", encoding="utf-8")
+        self.assertIn("no release candidates", hive.tool_ratchet("release"))
+
+
+def ratchet_entries(path):
+    import ledger
+    return ledger.read_ledger(path)
+
+
 if __name__ == "__main__":
     unittest.main()

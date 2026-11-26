@@ -164,3 +164,64 @@ def staged_violations(vault, repo="."):
         blob = subprocess.run(["git", "show", f":{name}"], cwd=repo, capture_output=True, check=False).stdout
         out += [(name, line, r) for r, line in check_text(rules, "repo", name, blob.decode("utf-8", "replace"))]
     return out
+
+
+# ---------------------------------------------------------------- RATCHET-03 release
+# A canonical lesson injected into >= RELEASE_SESSIONS distinct real sessions that never earned a helpful tag (and
+# has no shipped rule) costs tokens every session for no measured benefit: propose retiring it. A proposal only;
+# the human applies `{"remove": [id]}` with `hive ace apply`. Ids are matched per scope from `context` ledger
+# events (global: every project's events; a project: its own), so a project id that shadows a global id can
+# inflate a count. That only makes a proposal, never a removal.
+RELEASE_SESSIONS = 20
+
+
+def injection_sessions(entries, scope):
+    """{bullet_id: {session ids}} from `context` ledger events; anonymous per-process ids never count."""
+    out = {}
+    for e in entries:
+        if e.get("event") != "context" or (scope != "global" and e.get("project") != scope):
+            continue
+        session = str(e.get("session_id") or "")
+        if not session or session.startswith("proc-"):
+            continue
+        for b in e.get("injected_bullets") or []:
+            out.setdefault(str(b), set()).add(session)
+    return out
+
+
+def release_candidates(scope, bullets, meta, sessions, rules):
+    """[(bullet, n_sessions)] canonical, never helpful, no shipped rule, injected in >= RELEASE_SESSIONS sessions."""
+    import quorum
+    out = []
+    for b in sorted(bullets, key=lambda b: b["id"]):
+        n = len(sessions.get(b["id"], ()))
+        if (quorum.state_of(meta, b["id"]) == "canonical" and int(b.get("helpful", 0)) == 0
+                and not retired(rules, scope, b["id"]) and n >= RELEASE_SESSIONS):
+            out.append((b, n))
+    return out
+
+
+def propose_release(vault, scopes, entries, agent, session, today=None):
+    """Write `inbox/retire-<scope>-<id>.md` per candidate (existing proposals kept); returns written paths."""
+    import ace
+    import quorum
+    today = today or datetime.date.today().isoformat()
+    rules = load_rules(vault)
+    written = []
+    for scope in scopes:
+        meta = quorum.load(quorum.meta_path(ace.scope_path(scope)))
+        bullets = [b for bs in ace.load(scope).values() for b in bs]
+        for b, n in release_candidates(scope, bullets, meta, injection_sessions(entries, scope), rules):
+            path = Path(vault) / "inbox" / f"retire-{scope}-{b['id']}.md"
+            if path.exists():
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                f"---\ntype: note\nproject: {scope}\nagent: {agent}\nstatus: active\nupdated: {today}\n"
+                f"source: session {session}\n---\n# Retire proposal: {b['id']}\n\n"
+                f"Canonical lesson ({scope}) injected into {n} sessions, never tagged helpful: {b['content']}\n\n"
+                f"Retire (human): write `{{\"remove\": [\"{b['id']}\"]}}` to a file and run "
+                f"`hive ace apply {scope} <file>`. Keep it by tagging it helpful once it earns its place.\n",
+                encoding="utf-8", newline="\n")
+            written.append(path)
+    return written

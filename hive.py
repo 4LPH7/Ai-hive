@@ -1365,11 +1365,20 @@ def tool_ratchet(*args):
         rules = ratchet.load_rules(VAULT)
         return "\n".join(f"{r['id']}  {r['target']}  {r['glob']}  `{r['pattern']}`" for r in rules) or \
             "ratchet: no shipped rules"
-    scopes = [validate_slug(args[0])] if args else ["global"] + sorted(
+    release = bool(args) and args[0] == "release"  # RATCHET-03
+    rest = args[1:] if release else args
+    scopes = [validate_slug(rest[0])] if rest else ["global"] + sorted(
         p.parent.name for p in (Path(VAULT) / "projects").glob("*/playbook.md"))
-    written = ratchet.propose(VAULT, scopes, ledger.resolve_agent(), ledger.resolve_session())
-    if not written:
-        return "ratchet: no new candidates (canonical lessons that ban a `backticked` token)"
+    if release:
+        written = ratchet.propose_release(VAULT, scopes, ledger.read_ledger(LEDGER_PATH), ledger.resolve_agent(),
+                                          ledger.resolve_session())
+        if not written:
+            return (f"ratchet: no release candidates (canonical, never helpful, injected in >= "
+                    f"{ratchet.RELEASE_SESSIONS} sessions)")
+    else:
+        written = ratchet.propose(VAULT, scopes, ledger.resolve_agent(), ledger.resolve_session())
+        if not written:
+            return "ratchet: no new candidates (canonical lessons that ban a `backticked` token)"
     return "\n".join(f"ratchet: proposal written to {p}" for p in written)
 
 

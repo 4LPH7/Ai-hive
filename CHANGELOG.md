@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ERRORs in `hive lint`; repo rules block staged files in `hive pre-commit`; the source bullet stops being
   injected (`ace.select`, `load_injectable`). Patterns are literal substrings; globs support `*` and `?` only,
   with identical semantics in both languages. Phase 8 gate covered by Python and Rust end-to-end tests.
+- **RATCHET-03 `hive ratchet release [scope]`**: proposes retiring (`inbox/retire-<scope>-<id>.md`) canonical
+  lessons injected into >= 20 distinct real sessions (from `context` ledger events; per-process ids ignored)
+  that were never tagged helpful and have no shipped rule. A proposal only: the human applies
+  `{"remove": [id]}` with `hive ace apply`.
 
 ### Fixed
 - **`est_tokens` parity**: the Rust estimator counted UTF-8 bytes and a newline after every line, including a

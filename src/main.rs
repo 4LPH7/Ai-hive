@@ -183,6 +183,8 @@ pub enum RatchetCommands {
     },
     /// List shipped rules
     List,
+    /// RATCHET-03: propose retiring canonical lessons injected in >= 20 sessions and never tagged helpful
+    Release { scope: Option<String> },
 }
 
 #[derive(Subcommand, Debug)]
@@ -243,6 +245,26 @@ enum AceCommands {
         #[arg(long)]
         diff: bool,
     },
+}
+
+/// Ratchet scopes: the given one, else `global` plus every project with a playbook (sorted).
+fn ratchet_scopes(
+    vault: &std::path::Path,
+    scope: Option<String>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    if let Some(s) = scope {
+        return Ok(vec![ai_hive::common::validate_slug(&s)?]);
+    }
+    let mut v: Vec<String> = fs::read_dir(vault.join("projects"))
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .filter(|e| e.path().join("playbook.md").is_file())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    Ok(std::iter::once("global".to_string()).chain(v).collect())
 }
 
 /// Write a codex or handoff note, its DEAD_END traces and any GOV-04 proposals.
@@ -718,22 +740,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("{}  {}  {}  `{}`", r.id, r.target, r.glob, r.pattern);
                     }
                 }
+                Some(RatchetCommands::Release { scope }) => {
+                    let written = ai_hive::ratchet::propose_release(
+                        &cfg.vault,
+                        &ratchet_scopes(&cfg.vault, scope)?,
+                        &ai_hive::ledger::read_ledger(&cfg.ledger, None, None),
+                        &ai_hive::ledger::resolve_agent(None),
+                        &ai_hive::ledger::resolve_session(None),
+                        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+                    )?;
+                    if written.is_empty() {
+                        println!(
+                            "ratchet: no release candidates (canonical, never helpful, injected in >= {} sessions)",
+                            ai_hive::ratchet::RELEASE_SESSIONS
+                        );
+                    }
+                    for p in written {
+                        println!("ratchet: proposal written to {}", p.display());
+                    }
+                }
                 None => {
-                    let scopes: Vec<String> = match scope {
-                        Some(s) => vec![ai_hive::common::validate_slug(&s)?],
-                        None => {
-                            let mut v: Vec<String> = fs::read_dir(cfg.vault.join("projects"))
-                                .map(|rd| {
-                                    rd.filter_map(Result::ok)
-                                        .filter(|e| e.path().join("playbook.md").is_file())
-                                        .map(|e| e.file_name().to_string_lossy().into_owned())
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            v.sort();
-                            std::iter::once("global".to_string()).chain(v).collect()
-                        }
-                    };
+                    let scopes = ratchet_scopes(&cfg.vault, scope)?;
                     let written = ai_hive::ratchet::propose(
                         &cfg.vault,
                         &scopes,
