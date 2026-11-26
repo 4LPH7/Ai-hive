@@ -22,13 +22,20 @@ def build(root):
     """Hermetic vault + projects root: 12 notes, one repo graph, a few lint findings."""
     root = Path(root)
     vault, projects = root / "vault", root / "projects"
+    # BM25 scores must be distinct: query terms sit in under half the notes (IDF > 0) and "rows" repeats i+1
+    # times, so no two hits tie. Tied hits come back in SQLite row order, which follows the OS directory walk.
     for i in range(12):
         kind = "adr" if i % 3 == 0 else "note"
         path = vault / "projects" / "demo" / ("adrs" if kind == "adr" else "notes") / f"price-fetch-{i:02d}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
-        body = (f"The price fetcher step {i} parses rows from the upstream feed and stores rows in the cache. "
-                "Retries use exponential backoff; the parser rejects malformed rows. ") * 3
+        body = (f"The price fetcher step {i} parses the upstream feed and stores it in the cache. "
+                "Retries use exponential backoff; the parser rejects malformed input. " + "rows " * (i + 1))
         path.write_text(NOTE.format(type=kind, d=i % 9, title=f"Price fetcher decision {i}", body=body),
+                        encoding="utf-8")
+    for i in range(16):
+        path = vault / "projects" / "demo" / "notes" / f"deploy-{i:02d}.md"
+        path.write_text(NOTE.format(type="note", d=i % 9, title=f"Deploy pipeline step {i}",
+                                    body=f"Canary rollout {i} waits for health checks before promotion."),
                         encoding="utf-8")
     (vault / "notes").mkdir(parents=True, exist_ok=True)
     (vault / "notes" / "Bad Name.md").write_text("no frontmatter [[missing-link]]\n", encoding="utf-8")
