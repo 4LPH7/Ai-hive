@@ -34,13 +34,13 @@ class QuorumSidecarTest(unittest.TestCase):
         self.assertFalse(quorum.meta_path(path).exists())
 
     def test_add_is_scout_with_origin_and_prune_retires_without_id_reuse(self):
-        r = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "first scout lesson about tokenizer"}])
+        r = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": "first scout lesson about tokenizer"}])
         (bid,) = r["added"]
         rec = self.meta()[bid]
         self.assertEqual((rec["state"], rec["origin_session"], rec["origin_agent"]), ("scout", "sess-a", "claude"))
         ace.apply("demo", [{"type": "TAG", "id": bid, "harmful": 9}])
         self.assertEqual(self.meta()[bid]["state"], "retired")
-        r2 = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "another unrelated graph cache rule"}])
+        r2 = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": "another unrelated graph cache rule"}])
         self.assertNotEqual(r2["added"], [bid], "a retired id must never be reissued")
         # old readers: every live line still matches the unchanged line regex
         lines = [l for l in ace.scope_path("demo").read_text(encoding="utf-8").splitlines() if l.startswith("- [")]
@@ -64,7 +64,7 @@ class QuorumEvidenceTest(QuorumSidecarTest):
     """QUOR-02: test+commit 1.0, other-session confirm 1.0, self-tag 0.35, same-session repeat 0."""
 
     def test_evidence_weights_and_same_session_repeat(self):
-        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "scout lesson on cache keys"}])["added"]
+        (bid,) = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": "scout lesson on cache keys"}])["added"]
         tag = lambda **kw: ace.apply("demo", [dict({"type": "TAG", "id": bid, "tag": "helpful"}, **kw)])
         tag()  # origin session sess-a -> self_tag
         self.assertAlmostEqual(quorum.score(self.meta()[bid]), 0.35)
@@ -97,19 +97,19 @@ class QuorumPromotionTest(QuorumSidecarTest):
         path = ace.scope_path("demo")
         path.parent.mkdir(parents=True)
         path.write_text("## pitfalls\n- [pit-00001] seen=2 helpful=2 harmful=0 :: legacy lesson here\n", encoding="utf-8")
-        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "scout lesson on cache keys"}])["added"]
+        (bid,) = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": "scout lesson on cache keys"}])["added"]
         self.assertEqual(self.ids_injected(), {"pit-00001"}, "scouts are never injected")
         ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful", "evidence": "test_pass"}])  # 1.0, 1 session
         self.assertEqual(quorum.state_of(self.meta(), bid), "scout")
         # another session independently proposes the same lesson: near-duplicate ADD counts as confirm
         with mock.patch.dict("os.environ", {"HIVE_SESSION_ID": "sess-b"}):
-            r = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "scout lesson on cache keys again"}])
+            r = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": "scout lesson on cache keys again"}])
         self.assertEqual(r["reinforced"], [bid])
         self.assertEqual(quorum.state_of(self.meta(), bid), "canonical")  # 1.0 + 1.0 from 2 sessions
         self.assertIn(bid, self.ids_injected())
 
     def test_two_sessions_below_threshold_is_quorum_behind_flag(self):
-        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "scout lesson on graph cache"}])["added"]
+        (bid,) = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": "scout lesson on graph cache"}])["added"]
         ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful"}])                     # sess-a self 0.35
         ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful", "session": "sess-c",
                             "evidence": "bogus"}])                                            # sess-c confirm 1.0
@@ -121,7 +121,7 @@ class QuorumPromotionTest(QuorumSidecarTest):
             self.assertIn(bid, self.ids_injected())
 
     def test_single_session_never_promotes(self):
-        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "one session hallucinated rule"}])["added"]
+        (bid,) = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": "one session hallucinated rule"}])["added"]
         ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful", "evidence": "test_pass"}])
         ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful"}])
         self.assertEqual(quorum.state_of(self.meta(), bid), "scout")
@@ -131,7 +131,7 @@ class QuorumPromotionTest(QuorumSidecarTest):
 
     def test_anonymous_process_sessions_get_no_cross_session_credit(self):
         with mock.patch.dict("os.environ", {"HIVE_SESSION_ID": "", "CLAUDE_CODE_SESSION_ID": ""}):
-            (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "anon lesson on locks"}])["added"]
+            (bid,) = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": "anon lesson on locks"}])["added"]
             for _ in range(3):  # each CLI call would get a fresh proc- id
                 ace.apply("demo", [{"type": "TAG", "id": bid, "tag": "helpful",
                                     "session": f"proc-{_}-x"}])
@@ -140,7 +140,7 @@ class QuorumPromotionTest(QuorumSidecarTest):
 
     def test_cli_delta_cannot_forge_session_or_evidence(self):
         import json
-        (bid,) = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": "forged lesson attempt"}])["added"]
+        (bid,) = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": "forged lesson attempt"}])["added"]
         delta = self.vault / "delta.json"
         delta.write_text(json.dumps({"operations": [
             {"type": "TAG", "id": bid, "tag": "helpful", "session": "fake-1", "evidence": "test_pass"},
@@ -171,7 +171,7 @@ class QuorumConflictTest(QuorumSidecarTest):
                         "Access is denied on target/release/hive.exe; use cargo check until sessions close.\n",
                         encoding="utf-8")
         ch_text = "rebuild anyway: rename target/release/hive.exe, then cargo build --release"
-        (ch,) = ace.apply("demo", [{"type": "ADD", "section": "commands", "content": ch_text}])["added"]
+        (ch,) = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "commands", "content": ch_text}])["added"]
         ace.apply("demo", [{"type": "TAG", "id": ch, "tag": "helpful", "session": "sess-a", "evidence": "test_pass"}])
         ace.apply("demo", [{"type": "TAG", "id": ch, "tag": "helpful", "session": "sess-b"}])
         m = self.meta()

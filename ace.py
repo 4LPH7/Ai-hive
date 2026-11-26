@@ -276,7 +276,8 @@ def apply_ops(sections, ops, today=None, reserved=()):
     t_date = datetime.date.fromisoformat(today) if today else datetime.date.today()
     new = {name: [dict(b) for b in bullets] for name, bullets in sections.items()}
     by_id = {b["id"]: b for bullets in new.values() for b in bullets}
-    report = {"added": [], "reinforced": [], "tagged": 0, "rejected": [], "pruned": []}
+    report = {"added": [], "reinforced": [], "tagged": 0, "rejected": [], "pruned": [], "failure_refs": {},
+              "unsourced": []}
     next_n = max((int(i.split("-")[1]) for i in [*by_id, *reserved]), default=0) + 1  # retired ids never reissued
     adds = 0
     for op in ops if isinstance(ops, list) else []:
@@ -319,6 +320,9 @@ def apply_ops(sections, ops, today=None, reserved=()):
         if twin and jaccard(tokens(twin["content"]), tokens(content)) >= DUP_JACCARD:
             twin["seen"] = twin.get("seen", twin["helpful"] + twin["harmful"]) + 1  # reinforce seen count without inflating helpful
             report["reinforced"].append(twin["id"])
+            ref = quorum.valid_failure_ref(op.get("failure_ref"))
+            if ref:  # RATCHET-01: a re-proposal with a ref can source an unsourced scout
+                report["failure_refs"][twin["id"]] = ref
             continue
         bullet = {"id": f"{SECTIONS[section]}-{next_n:05d}", "seen": 1, "helpful": 0, "harmful": 0, "content": content}
         next_n += 1
@@ -326,6 +330,10 @@ def apply_ops(sections, ops, today=None, reserved=()):
         new[section].append(bullet)
         by_id[bullet["id"]] = bullet
         report["added"].append(bullet["id"])
+        ref = quorum.valid_failure_ref(op.get("failure_ref"))  # RATCHET-01
+        report["failure_refs"][bullet["id"]] = ref
+        if not ref:
+            report["unsourced"].append(bullet["id"])
     for name in new:  # refine: prune bullets the evidence says hurt or decayed
         keep = [b for b in new[name] if (b["harmful"] + bullet_decay(b, t_date)) < b["helpful"] + PRUNE_MARGIN]
         report["pruned"] += [b["id"] for b in new[name] if b not in keep]
@@ -370,7 +378,8 @@ def apply(scope, ops, today=None):
         # QUOR-04: conflicts inside this playbook gate promotion and are reported; lines are never touched
         pairs = quorum.conflicts([b for bullets in new_sections.values() for b in bullets])
         if report["added"] or report["pruned"] or evidence:  # QUOR-01/02, PROV-04: sidecar, same lock
-            base = quorum.reconcile(meta, report["added"], report["pruned"], session, agent, int(time.time()))
+            base = quorum.cite(quorum.reconcile(meta, report["added"], report["pruned"], session, agent,
+                                                int(time.time())), report["failure_refs"], report["added"])
             meta = quorum.displace(base, quorum.add_evidence(base, evidence, quorum.gates(base, pairs)), pairs)
             quorum.save(meta_file, meta)
         quorum.write_report(VAULT / "_meta" / "_conflicts.md", slugify(scope), pairs, meta,

@@ -1138,4 +1138,20 @@ mod tests {
         }
         assert!(tools[0]["inputSchema"]["properties"]["handoff"].is_object());
     }
+
+    /// MCP-01/02 (Phase 9 gate): at most 6 tools and a fixed schema token budget (measured at v2.7.2 + 10%).
+    /// Raising SCHEMA_TOKEN_CAP is a deliberate, reviewed change. Mirror of tests/python/test_schema_budget.py.
+    #[test]
+    fn test_schema_budget() {
+        const MAX_TOOLS: usize = 6;
+        const SCHEMA_TOKEN_CAP: usize = 1140;
+        let tools = tool_list();
+        assert!(tools.as_array().unwrap().len() <= MAX_TOOLS);
+        let size = crate::common::est_tokens(&serde_json::to_string(&tools).unwrap());
+        println!("MCP schema ~{size} est tokens (cap {SCHEMA_TOKEN_CAP})");
+        assert!(
+            size <= SCHEMA_TOKEN_CAP,
+            "MCP tool schema is ~{size} est tokens (cap {SCHEMA_TOKEN_CAP}); trim descriptions first"
+        );
+    }
 }

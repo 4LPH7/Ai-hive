@@ -389,6 +389,9 @@ pub fn save(
 pub struct AddOp {
     pub section: String,
     pub content: String,
+    /// RATCHET-01: commit sha, error hash or session id the lesson came from
+    #[serde(default)]
+    pub failure_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -445,6 +448,7 @@ pub fn parse_delta(json_str: &str) -> Result<DeltaOps, String> {
             "ADD" => adds.push(AddOp {
                 section: field("section"),
                 content: field("content"),
+                failure_ref: Some(field("failure_ref")).filter(|r| !r.is_empty()),
             }),
             "TAG" => {
                 let num = |k: &str| op.get(k).and_then(|x| x.as_i64()).filter(|n| *n > 0);
@@ -478,16 +482,20 @@ pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Res
         ops,
         &std::collections::HashSet::new(),
         &mut Vec::new(),
+        &mut std::collections::BTreeMap::new(),
     )
 }
 
 /// `apply`, but new ids also skip `reserved` (retired ids from the quorum sidecar are never reissued), and
-/// ids an ADD reinforced as a near-duplicate are pushed to `reinforced` (QUOR-03 confirmations).
+/// ids an ADD reinforced as a near-duplicate are pushed to `reinforced` (QUOR-03 confirmations). `refs`
+/// gets each added id's validated failure_ref ("" when none) and each reinforced id's ref when one was given
+/// (RATCHET-01).
 pub fn apply_reserving(
     sections: &mut HashMap<String, Vec<Bullet>>,
     ops: &DeltaOps,
     reserved: &std::collections::HashSet<String>,
     reinforced: &mut Vec<String>,
+    refs: &mut std::collections::BTreeMap<String, String>,
 ) -> Result<usize, String> {
     let mut changed = 0usize;
 
@@ -570,6 +578,10 @@ pub fn apply_reserving(
             {
                 existing.seen += 1;
                 reinforced.push(existing.id.clone());
+                let r = crate::quorum::valid_failure_ref(a.failure_ref.as_deref().unwrap_or(""));
+                if !r.is_empty() {
+                    refs.insert(existing.id.clone(), r);
+                }
                 changed += 1;
                 continue;
             }
@@ -588,6 +600,10 @@ pub fn apply_reserving(
             }
             let new_id = format!("{}-{:05}", prefix, next_num);
             let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
+            refs.insert(
+                new_id.clone(),
+                crate::quorum::valid_failure_ref(a.failure_ref.as_deref().unwrap_or("")),
+            );
             bullets.push(Bullet {
                 id: new_id,
                 seen: 1,
@@ -648,7 +664,8 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
     let meta = crate::quorum::load(&meta_file);
     let reserved = meta.keys().cloned().collect();
     let mut reinforced = Vec::new();
-    let changed = apply_reserving(&mut sections, ops, &reserved, &mut reinforced)?;
+    let mut refs = std::collections::BTreeMap::new();
+    let changed = apply_reserving(&mut sections, ops, &reserved, &mut reinforced, &mut refs)?;
     save(vault, scope, &sections, None)?;
     // QUOR-01/PROV-04: state + origin sidecar, written under the same lock
     let after = ids(&sections);
@@ -695,7 +712,18 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
         added.sort();
         pruned.sort();
         let now = chrono::Utc::now().timestamp();
-        let base = crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent, now);
+        let base = crate::quorum::cite(
+            &crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent, now),
+            &refs,
+            &added,
+        );
+        let unsourced: Vec<&String> = added
+            .iter()
+            .filter(|id| refs.get(*id).is_none_or(|r| r.is_empty()))
+            .collect();
+        if !unsourced.is_empty() {
+            eprintln!("ace: {unsourced:?} added without a valid failure_ref (commit sha, error hash or session id): weight 0 until a later ADD cites one");
+        }
         let gates = crate::quorum::gates(&base, &pairs);
         meta = crate::quorum::displace(
             &base,
@@ -806,6 +834,7 @@ mod tests {
             add: Some(vec![AddOp {
                 section: "strategies".to_string(),
                 content: "Always check memory before refactoring".to_string(),
+                failure_ref: None,
             }]),
             tag: None,
             remove: None,
@@ -820,6 +849,7 @@ mod tests {
             add: Some(vec![AddOp {
                 section: "strategies".to_string(),
                 content: "Always check memory before any refactoring".to_string(),
+                failure_ref: None,
             }]),
             tag: None,
             remove: None,

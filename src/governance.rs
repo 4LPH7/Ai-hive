@@ -359,6 +359,7 @@ fn audit_bullet(
             origin_session: String::new(),
             origin_agent: String::new(),
             origin_ts: 0,
+            failure_ref: None,
             evidence: Vec::new(),
         });
         let mut out = vec![

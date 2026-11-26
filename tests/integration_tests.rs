@@ -174,6 +174,7 @@ fn test_rust_concurrent_writers_no_lost_updates() {
                 add: Some(vec![ai_hive::ace::AddOp {
                     section: "strategies".to_string(),
                     content: format!("Thread A bullet {:02}", i),
+                    failure_ref: None,
                 }]),
                 tag: None,
                 remove: None,
@@ -189,6 +190,7 @@ fn test_rust_concurrent_writers_no_lost_updates() {
                 add: Some(vec![ai_hive::ace::AddOp {
                     section: "pitfalls".to_string(),
                     content: format!("Thread B bullet {:02}", i),
+                    failure_ref: None,
                 }]),
                 tag: None,
                 remove: None,

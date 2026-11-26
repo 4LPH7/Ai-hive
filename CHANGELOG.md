@@ -5,6 +5,17 @@ All notable changes to `ai-hive` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - v2.8.0 (Phase 8 addendum)
+
+### Added
+- **RATCHET-01 failure refs (`quorum.py`, `src/quorum.rs`, `ace.py`, `src/ace.rs`)**: every ACE ADD may carry
+  `failure_ref` (commit sha, error hash or session id; 4-120 safe chars, secret-checked). A new bullet without a
+  valid ref lands as a scout with weight 0 that never promotes until a later ADD of the same lesson cites one.
+  Sidecar records written before 2.8.0 carry no `failure_ref` key and keep their old bytes and behaviour.
+  `ace apply` reports `unsourced` ids; the `hive-ace` skill documents the field.
+- **MCP-02 schema budget**: Python and Rust tests cap the six MCP tool schemas at 1,140 est tokens (1,037
+  measured at v2.7.2 + 10%), so tool descriptions cannot creep into context confusion. MCP-01 (≤ 6 tools) holds.
+
 ## [2.7.1] - 2026-11-26
 
 ### Added

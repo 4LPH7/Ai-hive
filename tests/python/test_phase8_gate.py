@@ -59,14 +59,14 @@ class Phase8GateTest(unittest.TestCase):
         return {b["id"] for _, _, b in ace.select(["demo"])}
 
     def test_1_and_2_quorum_promotion(self):
-        (lone,) = self.as_session("h1", [{"type": "ADD", "section": "pitfalls",
+        (lone,) = self.as_session("h1", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls",
                                           "content": "hallucinated: always delete the lockfile first"}])["added"]
         self.as_session("h1", [{"type": "TAG", "id": lone, "tag": "helpful"}])
         self.as_session("h1", [{"type": "TAG", "id": lone, "tag": "helpful", "evidence": "test_pass"}])
         self.assertEqual(self.state(lone), "scout")
         self.assertNotIn(lone, self.injected())
 
-        (good,) = self.as_session("s1", [{"type": "ADD", "section": "strategies",
+        (good,) = self.as_session("s1", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "strategies",
                                           "content": "pin the parser version before regenerating fixtures"}])["added"]
         self.as_session("s1", [{"type": "TAG", "id": good, "tag": "helpful", "evidence": "test_pass"}])
         self.as_session("s2", [{"type": "TAG", "id": good, "tag": "helpful"}])
@@ -79,8 +79,8 @@ class Phase8GateTest(unittest.TestCase):
                              ("RECENT_FIX", f"src/{tag}_c.rs")):
             traces.add(self.db, "demo", kind, target, f"{tag} {kind.lower()} signal", agent, session, T0)
         with mock.patch.dict("os.environ", {"HIVE_SESSION_ID": session, "HIVE_AGENT": agent}):
-            ids = ace.apply("demo", [{"type": "ADD", "section": "pitfalls", "content": f"{tag} lesson one zz{tag}"},
-                                     {"type": "ADD", "section": "commands", "content": f"{tag} lesson two yy{tag}"}])["added"]
+            ids = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls", "content": f"{tag} lesson one zz{tag}"},
+                                     {"type": "ADD", "failure_ref": "commit:abc1234", "section": "commands", "content": f"{tag} lesson two yy{tag}"}])["added"]
         codex.write(self.vault, self.db, "demo", {"goal": f"{tag} goal", "outcome": f"done: {tag} marker{tag}",
                     "files": [f"src/{tag}_a.rs"], "dead_ends": [], "invariants": [], "open_threads": [f"{tag} thread"]},
                     agent, session, "2027-01-15", T0)
@@ -126,7 +126,7 @@ class Phase8GateTest(unittest.TestCase):
         incumbent = ("cargo build --release fails with Access is denied on target/release/hive.exe; "
                      "use cargo check until sessions close.")
         path.write_text(f"## pitfalls\n- [pit-00001] seen=3 helpful=3 harmful=0 :: {incumbent}\n", encoding="utf-8")
-        (ch,) = self.as_session("s1", [{"type": "ADD", "section": "commands",
+        (ch,) = self.as_session("s1", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "commands",
                                         "content": "rebuild anyway: rename target/release/hive.exe, then cargo build --release"}])["added"]
         for s, extra in (("s1", {"evidence": "test_pass"}), ("s2", {}), ("s3", {})):
             self.as_session(s, [dict({"type": "TAG", "id": ch, "tag": "helpful"}, **extra)])
