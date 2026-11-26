@@ -23,7 +23,7 @@ uses can be changed with an environment variable:
 ```bash
 git clone https://github.com/4LPH7/ai-hive.git D:\PROJECTS\ai-hive
 cd D:\PROJECTS\ai-hive
-python -m unittest
+python -m unittest discover  # Python suite: tests/python/
 ```
 
 All tests use temporary folders; none touch your vault.

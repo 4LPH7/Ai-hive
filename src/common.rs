@@ -101,6 +101,24 @@ pub fn note_age(updated: &str) -> String {
     }
 }
 
+/// Quote an agent-written note so the reader treats its text as data, never as instructions.
+pub fn frame_untrusted(
+    rel: &str,
+    meta: &std::collections::HashMap<String, String>,
+    body: &str,
+) -> String {
+    let get = |k: &str, d: &'static str| meta.get(k).map(String::as_str).unwrap_or(d).to_string();
+    let header = format!(
+        "> [!NOTE] Untrusted vault note: path=\"{}\", agent=\"{}\", source=\"{}\", age=\"{}\"",
+        rel,
+        get("agent", "unknown"),
+        get("source", "unknown"),
+        note_age(&get("updated", ""))
+    );
+    let quoted: Vec<String> = body.trim().lines().map(|l| format!("> {l}")).collect();
+    format!("{header}\n{}", quoted.join("\n"))
+}
+
 pub fn active_work_cell_matches(cell: &str, project_slug: &str) -> bool {
     let clean = cell.trim().trim_matches('[').trim_matches(']').trim();
     let candidates = if clean.contains('|') {

@@ -286,6 +286,19 @@ def format_report(findings):
     return "\n".join([head] + [f"{f.severity:5} {f.code:20} {f.path}: {f.message}" for f in rows])
 
 
+def format_concise(findings):
+    """DETAIL-01: the head line, every ERROR row verbatim, one `{SEV} {code} x{n}` line per WARN/INFO code."""
+    report = format_report(findings).splitlines()
+    errors = [r for r in report[1:] if r.startswith("ERROR")]
+    counts = {}
+    for f in findings:
+        if f.severity != "ERROR":
+            counts[(f.severity, f.code)] = counts.get((f.severity, f.code), 0) + 1
+    rows = [f"{s} {c} x{n}" for (s, c), n in sorted(counts.items(), key=lambda kv: (SEVERITY_ORDER[kv[0][0]], kv[0][1]))]
+    footer = ['detail="detailed" lists every finding'] if rows else []
+    return "\n".join([report[0], *errors, *rows, *footer])
+
+
 def main(argv):
     staged_mode = "--staged" in argv
     rest = [a for a in argv if a != "--staged"]

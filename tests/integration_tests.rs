@@ -786,3 +786,69 @@ fn test_utf8_slicing_and_force_refresh_rust() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// HAND-01: `hive handoff write` writes an envelope; `hive context --handoff <id>` returns only that envelope.
+#[test]
+fn test_handoff_cli_write_and_context_read() {
+    let tmp = std::env::temp_dir().join(format!("hive_handoff_cli_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("vault")).unwrap();
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .env("HIVE_DB", tmp.join("hive.sqlite"))
+            .env("HIVE_LEDGER", tmp.join("ledger.jsonl"))
+            .env("HIVE_VAULT", tmp.join("vault"))
+            .env("HIVE_ARTIFACTS", tmp.join("artifacts"))
+            .env("HIVE_SESSION_ID", "cli-handoff")
+            .env("HIVE_AGENT", "claude")
+            .output()
+            .unwrap()
+    };
+    let rec = tmp.join("rec.json");
+    std::fs::write(
+        &rec,
+        r#"{"goal": "wire handoff", "outcome": "partial: CLI done", "files": ["src/codex.rs"],
+            "dead_ends": ["serde flatten: breaks deny_unknown_fields"], "invariants": [],
+            "open_threads": ["MCP param"], "status": "PARTIAL", "role": "reviewer",
+            "completed_plan_items": ["parse_handoff"], "artifact_paths": ["src/codex.rs"]}"#,
+    )
+    .unwrap();
+    let out = run(&["handoff", "write", "demo", rec.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("role=reviewer core_tokens=") && stdout.contains("/800"),
+        "{stdout}"
+    );
+    let id = stdout
+        .split("id=")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .unwrap()
+        .to_string();
+    let ctx = run(&["context", "demo", "--handoff", &id]);
+    let view = String::from_utf8_lossy(&ctx.stdout).to_string();
+    assert!(
+        ctx.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ctx.stderr)
+    );
+    assert!(
+        view.starts_with(&format!("## handoff {id} from claude")),
+        "{view}"
+    );
+    assert!(view.contains("> - serde flatten") && view.contains("full envelope:"));
+    assert!(!view.contains("_memory.md"));
+    // a codex record is not a handoff, and a handoff record is not a codex
+    assert!(!run(&["codex", "write", "demo", rec.to_str().unwrap()])
+        .status
+        .success());
+    let bad = run(&["context", "demo", "--handoff", "../../etc"]);
+    assert!(!bad.status.success());
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -62,6 +62,9 @@ enum Commands {
         task: Option<String>,
         #[arg(long, default_value = "1500")]
         budget: usize,
+        /// Return only this handoff envelope (id from `hive handoff write`)
+        #[arg(long)]
+        handoff: Option<String>,
     },
     /// Report index and graph freshness
     Status,
@@ -153,6 +156,11 @@ enum Commands {
         #[command(subcommand)]
         cmd: CodexCommands,
     },
+    /// Handoff envelopes: a codex plus status, role, completed items and artifact paths (HAND-01)
+    Handoff {
+        #[command(subcommand)]
+        cmd: CodexCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -215,6 +223,30 @@ enum AceCommands {
     },
 }
 
+/// Write a codex or handoff note, its DEAD_END traces and any GOV-04 proposals.
+fn write_record(
+    vault: &std::path::Path,
+    db: &std::path::Path,
+    project: &str,
+    rec: &ai_hive::codex::Record,
+) -> Result<(PathBuf, Vec<PathBuf>), Box<dyn std::error::Error>> {
+    let conn = ai_hive::index::open_db(db)?.0; // heals a corrupt index
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")?;
+    let path = ai_hive::codex::write(
+        vault,
+        &conn,
+        project,
+        rec,
+        &ai_hive::ledger::resolve_agent(None),
+        &ai_hive::ledger::resolve_session(None),
+        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+        chrono::Utc::now().timestamp(),
+    )?;
+    let slug = ai_hive::common::validate_slug(project)?;
+    let proposals = ai_hive::trace::propose(vault, &conn, &slug, chrono::Utc::now().timestamp())?;
+    Ok((path, proposals))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() <= 1 {
@@ -266,17 +298,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Commands::Graph { repo, query, limit } => {
                 let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
-                let res = tool_graph(&mut idx, &repo, &query, limit)?;
+                let res = tool_graph(&mut idx, &repo, &query, limit, false)?;
                 println!("{}", res);
             }
             Commands::Context {
                 project,
                 task,
                 budget,
+                handoff,
             } => {
                 let mut idx = Index::new(Some(cfg.vault), Some(cfg.db))?;
                 let t = task.as_deref().unwrap_or("");
-                let res = tool_context(&mut idx, &project, t, budget)?;
+                let h = handoff.as_deref().unwrap_or("");
+                let res = tool_context(&mut idx, &project, t, budget, h)?;
                 println!("{}", res);
             }
             Commands::Status => {
@@ -614,30 +648,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
             } => {
                 let rec = ai_hive::codex::parse(&fs::read_to_string(&record_file)?)?;
-                let conn = ai_hive::index::open_db(&cfg.db)?.0; // heals a corrupt index
-                conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")?;
-                let path = ai_hive::codex::write(
-                    &cfg.vault,
-                    &conn,
-                    &project,
-                    &rec,
-                    &ai_hive::ledger::resolve_agent(None),
-                    &ai_hive::ledger::resolve_session(None),
-                    &chrono::Local::now().format("%Y-%m-%d").to_string(),
-                    chrono::Utc::now().timestamp(),
-                )?;
+                let (path, proposals) = write_record(&cfg.vault, &cfg.db, &project, &rec)?;
                 println!(
                     "codex: wrote {} ({} dead-end traces)",
                     path.display(),
                     rec.dead_ends.len()
                 );
+                for p in proposals {
+                    println!("  proposal written to: {}", p.display());
+                }
+            }
+            Commands::Handoff {
+                cmd:
+                    CodexCommands::Write {
+                        project,
+                        record_file,
+                    },
+            } => {
+                let rec = ai_hive::codex::parse_handoff(&fs::read_to_string(&record_file)?)?;
+                let (path, proposals) = write_record(&cfg.vault, &cfg.db, &project, &rec)?;
                 let slug = ai_hive::common::validate_slug(&project)?;
-                for p in ai_hive::trace::propose(
-                    &cfg.vault,
-                    &conn,
-                    &slug,
-                    chrono::Utc::now().timestamp(),
-                )? {
+                let role = rec.role.clone().unwrap_or_default();
+                let budget = ai_hive::codex::role_budget(&role).unwrap_or(0);
+                let core = ai_hive::codex::core_tokens(&rec);
+                if core > budget {
+                    eprintln!("handoff: core is ~{core} tokens, over the {role} budget {budget}; the rest is dropped on read");
+                }
+                let id = path.file_stem().unwrap_or_default().to_string_lossy();
+                println!(
+                    "handoff: wrote codices/{slug}/{id}.md id={id} role={role} core_tokens={core}/{budget} ({} dead-end traces); receiver: hive_context(project=\"{slug}\", handoff=\"{id}\")",
+                    rec.dead_ends.len()
+                );
+                for p in proposals {
                     println!("  proposal written to: {}", p.display());
                 }
             }

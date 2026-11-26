@@ -5,6 +5,31 @@ All notable changes to `ai-hive` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.1] - 2026-11-26
+
+### Added
+- **Handoff envelopes (HAND-01/02, `hive handoff write`, `src/codex.rs`, `codex.py`)**: a codex record plus
+  `status` (SUCCESS|PARTIAL|ERROR), `role` (implementer|reviewer|verifier), `completed_plan_items` and
+  `artifact_paths`, written immutable to `codices/<slug>/YYYY-MM-DD-<sha8>.md` (at most 6 dead ends, 6 paths of
+  200 chars, 80 lines). Artifact paths must be repo-relative or `artifact:<sha256>`.
+- **Read by id**: `hive_context(project, handoff=<id>)` and `hive context <p> --handoff <id>` return only the
+  framed, untrusted envelope. Goal, outcome, every dead end and every artifact path are never truncated; the
+  rest is packed into the writer's role budget (implementer 1200, reviewer/verifier 800) with a pointer to the
+  note. Bad ids, tampered notes, plain codices and quarantined writers are refused.
+- **Concise MCP responses (DETAIL-01)**: `detail: concise|detailed` on `hive_search`, `hive_graph` and
+  `hive_lint`; MCP defaults to concise, the CLI and `tool_*` functions stay detailed (bytes pinned by
+  `tests/fixtures/detail_snapshots.json`). New `lint.format_concise`. Gate: concise/detailed = 0.26 on the fixture.
+- **Artifact offload (DETAIL-02, `src/artifact.rs`, `artifacts.py`)**: tool results over 2,000 est tokens
+  (except `hive_context` and errors) are secret-scrubbed into a content-addressed cache outside the vault
+  (`HIVE_ARTIFACTS`, else `LOCALAPPDATA`/`XDG_CACHE_HOME` `hive/artifacts`), purged after 7 days; the response
+  keeps a 400-token head and a pointer.
+- **README**: animated SVG cards (`assets/readme/`), agent and tool logos (Simple Icons CC0, Lobe Icons MIT with
+  bundled notice), and an offline interactive playground for trace decay and quorum (`docs/playground/`).
+
+### Changed
+- Python tests moved to `tests/python/` and shared fixtures to `tests/fixtures/`; `python -m unittest` still
+  discovers all of them from the repo root. The Phase 7 timing gate now takes the best of 3 calls.
+
 ## [2.5.0] - 2026-11-24
 
 ### Added
