@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   injected (`ace.select`, `load_injectable`). Patterns are literal substrings; globs support `*` and `?` only,
   with identical semantics in both languages. Phase 8 gate covered by Python and Rust end-to-end tests.
 
+### Changed
+- **Signal-preserving offload excerpt (`artifacts.excerpt`, `artifact::excerpt`)**: an offloaded result's inline
+  excerpt keeps the head (55% of 400 tokens), the tail (15%) and every error/fatal/panic/traceback/exception/
+  failed line in between, numbered `L<n>:`, instead of only the head. A FATAL at line 900 of a 1,000-line output
+  now survives. Byte-identical in both languages (pinned). Approach adapted from Headroom's log compressor
+  (headroomlabs-ai/headroom); the code is our own. The offload pointer now prints `os.path.abspath`, matching
+  Rust.
+
 ## [2.7.1] - 2026-11-26
 
 ### Added
