@@ -396,6 +396,13 @@ pub struct TagOp {
     pub id: String,
     pub helpful: Option<i64>,
     pub harmful: Option<i64>,
+    /// QUOR-02: the session this tag speaks for (`ledger score` credits the scored session). Trusted-only:
+    /// never read from a delta, so an agent-written delta cannot forge sessions or test evidence.
+    #[serde(skip_deserializing)]
+    pub session: Option<String>,
+    /// QUOR-02: evidence hint, `test_pass` from a passing scored session. Trusted-only, like `session`.
+    #[serde(skip_deserializing)]
+    pub evidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -439,19 +446,24 @@ pub fn parse_delta(json_str: &str) -> Result<DeltaOps, String> {
                 section: field("section"),
                 content: field("content"),
             }),
-            "TAG" => match field("tag").as_str() {
-                "helpful" => tags.push(TagOp {
-                    id: field("id"),
-                    helpful: Some(1),
-                    harmful: None,
-                }),
-                "harmful" => tags.push(TagOp {
-                    id: field("id"),
-                    helpful: None,
-                    harmful: Some(1),
-                }),
-                _ => {} // neutral
-            },
+            "TAG" => {
+                let num = |k: &str| op.get(k).and_then(|x| x.as_i64()).filter(|n| *n > 0);
+                let (helpful, harmful) = match field("tag").as_str() {
+                    "helpful" => (Some(1), None),
+                    "harmful" => (None, Some(1)),
+                    "" => (num("helpful"), num("harmful")), // Python form {id, helpful: n}
+                    _ => (None, None),                      // neutral
+                };
+                if helpful.is_some() || harmful.is_some() {
+                    tags.push(TagOp {
+                        id: field("id"),
+                        helpful,
+                        harmful,
+                        session: None, // trusted-only fields are dropped at this boundary
+                        evidence: None,
+                    });
+                }
+            }
             other => return Err(format!("unknown operation type {other:?}")),
         }
     }
@@ -461,6 +473,22 @@ pub fn parse_delta(json_str: &str) -> Result<DeltaOps, String> {
 }
 
 pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Result<usize, String> {
+    apply_reserving(
+        sections,
+        ops,
+        &std::collections::HashSet::new(),
+        &mut Vec::new(),
+    )
+}
+
+/// `apply`, but new ids also skip `reserved` (retired ids from the quorum sidecar are never reissued), and
+/// ids an ADD reinforced as a near-duplicate are pushed to `reinforced` (QUOR-03 confirmations).
+pub fn apply_reserving(
+    sections: &mut HashMap<String, Vec<Bullet>>,
+    ops: &DeltaOps,
+    reserved: &std::collections::HashSet<String>,
+    reinforced: &mut Vec<String>,
+) -> Result<usize, String> {
     let mut changed = 0usize;
 
     // 1. Process TAG
@@ -541,6 +569,7 @@ pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Res
                 .find(|b| jaccard_similarity(&b.content, content) >= DUP_JACCARD)
             {
                 existing.seen += 1;
+                reinforced.push(existing.id.clone());
                 changed += 1;
                 continue;
             }
@@ -548,8 +577,8 @@ pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Res
             // Generate new ID
             let prefix = SECTIONS.iter().find(|&&(s, _)| s == sec_name).unwrap().1;
             let mut next_num = 1;
-            for b in bullets.iter() {
-                if let Some(num_str) = b.id.strip_prefix(&format!("{}-", prefix)) {
+            for id in bullets.iter().map(|b| &b.id).chain(reserved.iter()) {
+                if let Some(num_str) = id.strip_prefix(&format!("{}-", prefix)) {
                     if let Ok(num) = num_str.parse::<usize>() {
                         if num >= next_num {
                             next_num = num + 1;
@@ -611,9 +640,92 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
     }
     let _lock = PlaybookLock::acquire(&path, std::time::Duration::from_secs(30))?;
     let mut sections = load(vault, scope)?;
-    let changed = apply(&mut sections, ops)?;
+    let ids = |s: &HashMap<String, Vec<Bullet>>| -> std::collections::HashSet<String> {
+        s.values().flatten().map(|b| b.id.clone()).collect()
+    };
+    let before = ids(&sections);
+    let meta_file = crate::quorum::meta_path(&path);
+    let meta = crate::quorum::load(&meta_file);
+    let reserved = meta.keys().cloned().collect();
+    let mut reinforced = Vec::new();
+    let changed = apply_reserving(&mut sections, ops, &reserved, &mut reinforced)?;
     save(vault, scope, &sections, None)?;
+    // QUOR-01/PROV-04: state + origin sidecar, written under the same lock
+    let after = ids(&sections);
+    let mut added: Vec<String> = after.difference(&before).cloned().collect();
+    let mut pruned: Vec<String> = before.difference(&after).cloned().collect();
+    let (session, agent) = (
+        crate::ledger::resolve_session(None),
+        crate::ledger::resolve_agent(None),
+    );
+    // QUOR-02 evidence: helpful tags on live bullets
+    let evidence: Vec<crate::quorum::Tag> = ops
+        .tag
+        .iter()
+        .flatten()
+        .filter(|t| t.helpful.unwrap_or(0) > 0 && after.contains(&t.id))
+        .map(|t| crate::quorum::Tag {
+            id: t.id.clone(),
+            session: t.session.clone().unwrap_or_else(|| session.clone()),
+            agent: agent.clone(),
+            hint: t.evidence.clone().unwrap_or_default(),
+        })
+        // QUOR-03: another session independently proposing the same lesson is a confirmation
+        .chain(
+            reinforced
+                .iter()
+                .filter(|id| after.contains(*id))
+                .map(|id| crate::quorum::Tag {
+                    id: id.clone(),
+                    session: session.clone(),
+                    agent: agent.clone(),
+                    hint: String::new(),
+                }),
+        )
+        .collect();
+    // QUOR-04: conflicts inside this playbook gate promotion and are reported; lines are never touched
+    let bullets: Vec<(String, String)> = sections
+        .values()
+        .flatten()
+        .map(|b| (b.id.clone(), b.content.clone()))
+        .collect();
+    let pairs = crate::quorum::conflicts(&bullets);
+    let mut meta = meta;
+    if !added.is_empty() || !pruned.is_empty() || !evidence.is_empty() {
+        added.sort();
+        pruned.sort();
+        let now = chrono::Utc::now().timestamp();
+        let base = crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent, now);
+        let gates = crate::quorum::gates(&base, &pairs);
+        meta = crate::quorum::displace(
+            &base,
+            &crate::quorum::add_evidence(&base, &evidence, &gates),
+            &pairs,
+        );
+        crate::quorum::save(&meta_file, &meta)?;
+    }
+    crate::quorum::write_report(
+        &vault.join("_meta").join("_conflicts.md"),
+        &crate::common::slugify(scope),
+        &pairs,
+        &meta,
+        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+    )?;
     Ok(changed)
+}
+
+/// QUOR-03: the playbook as agents may see it: only bullets whose quorum state is injectable.
+pub fn load_injectable(vault: &Path, scope: &str) -> Result<HashMap<String, Vec<Bullet>>, String> {
+    let mut sections = load(vault, scope)?;
+    let meta = crate::quorum::load(&crate::quorum::meta_path(&scope_path(vault, scope)?));
+    let rules = crate::governance::load_rules(vault); // GOV-02: quarantined bullets never injected
+    for bullets in sections.values_mut() {
+        bullets.retain(|b| {
+            crate::quorum::injectable(crate::quorum::state_of(&meta, &b.id))
+                && !crate::governance::bullet_hidden(&rules, meta.get(&b.id))
+        });
+    }
+    Ok(sections)
 }
 
 pub fn select_bullets(

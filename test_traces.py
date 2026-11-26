@@ -121,6 +121,57 @@ class HotFileEmitTest(unittest.TestCase):
             db.close()
 
 
+class TraceProposalTest(unittest.TestCase):
+    """GOV-04: a DEAD_END / RECENT_FIX reinforced by >= 2 sessions drafts a playbook ADD proposal into inbox/."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name)
+        self.db = sqlite3.connect(":memory:")
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def notes(self):
+        return sorted((self.vault / "inbox").glob("trace-*.md"))
+
+    def test_two_sessions_propose_once_with_section_by_kind(self):
+        traces.add(self.db, "demo", "DEAD_END", "src/a.rs", "patching tokenizer breaks static link", "claude", "s1", 0)
+        self.assertEqual(traces.propose(self.vault, self.db, "demo", 0), [], "one session is not enough")
+        traces.add(self.db, "demo", "DEAD_END", "src/a.rs", "patching tokenizer breaks static link", "codex", "s2", H)
+        traces.add(self.db, "demo", "RECENT_FIX", "src/c.rs", "pin serde to 1.0.200", "claude", "s1", H)
+        traces.add(self.db, "demo", "RECENT_FIX", "src/c.rs", "pin serde to 1.0.200", "codex", "s3", H)
+        traces.add(self.db, "demo", "HOT_FILE", "src/d.rs", "3 failed runs", "claude", "s1", H)
+        traces.add(self.db, "demo", "HOT_FILE", "src/d.rs", "3 failed runs", "codex", "s2", H)
+        written = traces.propose(self.vault, self.db, "demo", H)
+        self.assertEqual(len(written), 2, "HOT_FILE never proposes")
+        texts = [p.read_text(encoding="utf-8") for p in self.notes()]
+        dead = next(t for t in texts if "DEAD_END" in t)
+        fix = next(t for t in texts if "RECENT_FIX" in t)
+        self.assertIn('"section":"pitfalls"', dead)
+        self.assertIn("patching tokenizer breaks static link", dead)
+        self.assertIn("sessions s1, s2", dead)
+        self.assertIn('"section":"strategies"', fix)
+        self.assertEqual(traces.propose(self.vault, self.db, "demo", H), [], "never duplicated")
+        import lint
+        errors = [f for f in lint.lint(self.vault, files=[p.relative_to(self.vault).as_posix() for p in self.notes()])
+                  if f.severity == "ERROR"]
+        self.assertEqual(errors, [])
+
+    def test_anonymous_sessions_and_quarantined_traces_do_not_propose(self):
+        import governance
+        traces.add(self.db, "demo", "DEAD_END", "src/a.rs", "x fails", "claude", "proc-1-a", 0)
+        traces.add(self.db, "demo", "DEAD_END", "src/a.rs", "x fails", "claude", "proc-2-b", 0)
+        self.assertEqual(traces.propose(self.vault, self.db, "demo", 0), [])
+        traces.add(self.db, "demo", "DEAD_END", "src/z.rs", "y fails", "codex", "bad-s", 0)
+        traces.add(self.db, "demo", "DEAD_END", "src/z.rs", "y fails", "codex", "bad-t", 0)
+        governance.quarantine(self.vault, self.db, agent="codex", now=0)
+        self.assertEqual(traces.propose(self.vault, self.db, "demo", 0), [])
+
+
 class TraceCliFallbackTest(unittest.TestCase):
     """TRACE-03 Python fallback of `hive trace add|list`."""
 

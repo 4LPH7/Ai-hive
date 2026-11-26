@@ -116,6 +116,12 @@ def chat_completion(cfg, model, system_prompt, user_prompt, schema=None):
             if "error" in res_obj:
                 raise RuntimeError(f"OmniRoute API error: {res_obj['error']}")
             return res_obj["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:  # keep the server's reason: a bare "400 Bad Request" is undiagnosable
+        try:
+            detail = ace.scrub_secrets(e.read().decode("utf-8", "replace"))[:300]
+        except Exception:
+            detail = ""
+        raise ConnectionError(f"OmniRoute connection failed: {e}{': ' + detail if detail else ''}")
     except urllib.error.URLError as e:
         raise ConnectionError(f"OmniRoute connection failed: {e}")
     except (json.JSONDecodeError, KeyError, IndexError) as e:

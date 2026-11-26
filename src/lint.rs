@@ -255,6 +255,8 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
     let resolver = Resolver::new(&all_files);
 
     let mut findings = Vec::new();
+    let quarantined =
+        crate::governance::quarantined_paths(vault, &crate::governance::load_rules(vault));
     let re_journal_header = Regex::new(r"^## \d{2}:\d{2} [a-z]+ - \S.*?( \| [a-z-]+)?$").unwrap();
     let re_what_it_is = Regex::new(r"(?m)^## What it is\b").unwrap();
 
@@ -458,6 +460,15 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
                     code: "broken-link".to_string(),
                     path: rel.clone(),
                     message: format!("unresolvable link [[{}]]", link),
+                });
+            }
+            // GOV-02: warn on links into a quarantine radius
+            for hit in hits.iter().filter(|h| quarantined.contains(h.as_str())) {
+                findings.push(Finding {
+                    severity: "WARN".to_string(),
+                    code: "quarantined-link".to_string(),
+                    path: rel.clone(),
+                    message: format!("[[{}]] points at quarantined {}", link, hit),
                 });
             }
         }

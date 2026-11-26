@@ -158,6 +158,13 @@ pub fn context_section(vault: &Path, project: &str, task: &str) -> String {
         .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).collect())
         .unwrap_or_default();
     notes.retain(|p| p.extension().is_some_and(|x| x == "md"));
+    // GOV-02: quarantined codices never reach agents
+    let hidden = crate::governance::quarantined_paths(vault, &crate::governance::load_rules(vault));
+    notes.retain(|p| {
+        p.strip_prefix(vault)
+            .map(|r| !hidden.contains(&r.to_string_lossy().replace('\\', "/")))
+            .unwrap_or(true)
+    });
     notes.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
     let mut lines = Vec::new();
     for note in notes.iter().take(CONTEXT_MAX_CODICES) {

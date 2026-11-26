@@ -137,6 +137,7 @@ def load_config(cli_vault=None, cli_projects=None, cli_db=None, cli_ledger=None,
             ledger = str(Path(base) / "hive" / "ledger.jsonl")
 
     return {
+        **config_data,  # keep llm.* and projects.* keys: llm.load_llm_config reads them from here
         "vault": Path(vault),
         "projects": Path(projects),
         "db": Path(db),
@@ -249,12 +250,76 @@ def parse_note(text):
     return meta, (heading.group(1).strip() if heading else ""), body
 
 
+RECOVERED_SUFFIX = ".recovered"
+
+
+def _healthy(path):
+    """True when the SQLite file is absent (it will be created) or passes PRAGMA quick_check."""
+    if not Path(path).exists():
+        return True
+    try:
+        conn = sqlite3.connect(str(path), timeout=10)
+        try:
+            return conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _move_aside(path):
+    """Rename a corrupt db and its -wal/-shm to *.corrupt-<time> (kept for inspection). False if it is locked."""
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    try:
+        os.replace(path, f"{path}.corrupt-{stamp}")
+    except OSError:
+        return False
+    for side in ("-wal", "-shm"):
+        try:
+            os.replace(f"{path}{side}", f"{path}{side}.corrupt-{stamp}")
+        except OSError:
+            pass
+    return True
+
+
+def open_db(path):
+    """Connection to the disposable index at `path`, healing corruption: a corrupt file is moved aside and
+    rebuilt; when another process still holds it open, every new process shares `<path>.recovered` instead.
+    Returns (connection, path actually used)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    target = path
+    if not _healthy(path):
+        print(f"hive: {path} is corrupt; rebuilding the index from the vault", file=sys.stderr)
+        if not _move_aside(path):
+            target = path.with_name(path.name + RECOVERED_SUFFIX)
+            if not _healthy(target) and not _move_aside(target):
+                raise sqlite3.DatabaseError(f"{path} and {target} are corrupt and locked")
+    conn = sqlite3.connect(str(target), timeout=10, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn, target
+
+
 class Index:
     def __init__(self, vault=VAULT, db_path=DB_PATH):
         self.vault = Path(vault)
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(db_path), timeout=10, check_same_thread=False)
-        self.db.execute("PRAGMA journal_mode=WAL")
+        self.requested_path = Path(db_path)
+        self.db, self.db_path = open_db(self.requested_path)
+        self._init_schema()
+
+    def _recover(self, exc):
+        """A long-running process hit corruption: reopen through open_db once. False if not corruption."""
+        if not isinstance(exc, sqlite3.DatabaseError) or isinstance(exc, sqlite3.OperationalError):
+            return False
+        try:
+            self.db.close()
+        except sqlite3.Error:
+            pass
+        self.db, self.db_path = open_db(self.requested_path)
+        self._init_schema()
+        return True
+
+    def _init_schema(self):
         if self.db.execute("PRAGMA user_version").fetchone()[0] != 4:
             # derived index: a schema change just rebuilds it from the vault
             self.db.executescript("DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS notes_fts;")
@@ -320,7 +385,15 @@ class Index:
         return changed
 
     def search(self, query, project="", limit=8, scope="project"):
-        """BM25 (title x5) re-ranked by note type, status and project match."""
+        """BM25 (title x5) re-ranked by note type, status and project match. Heals a corrupt index once."""
+        try:
+            return self._search(query, project, limit, scope)
+        except sqlite3.DatabaseError as exc:
+            if not self._recover(exc):
+                raise
+            return self._search(query, project, limit, scope)
+
+    def _search(self, query, project="", limit=8, scope="project"):
         self.refresh()
         terms = re.findall(r"\w+", query.lower())
         if not terms:
@@ -342,8 +415,12 @@ class Index:
                 FROM notes_fts f JOIN notes n ON n.path = f.path
                 WHERE notes_fts MATCH ? ORDER BY s DESC LIMIT ?""", (match, limit * 4)).fetchall()
         hits = []
+        import governance
+        rules = governance.load_rules(self.vault)  # GOV-02: quarantined inbox proposals / codices never surface
         for path, title, proj, ntype, status, updated, agent, source, score, snip in rows:
             if scope == "project" and project and proj not in (project, "", "global"):
+                continue
+            if rules and governance.note_hidden(rules, path, source, agent, updated):
                 continue
             score *= TYPE_PRIOR.get(ntype, 1.0) * STATUS_PRIOR.get(status, 1.0)
             if project and proj == project:
@@ -800,8 +877,10 @@ def pack(sections, budget=1500, weights=None):
 def traces_section(db, project, task):
     """TRACE-04: live traces for hive_context; a broken trace table never blocks context."""
     try:
+        import governance
         import traces
-        live = traces.context_section(traces.active(db, project, int(time.time())), task)
+        items = governance.visible_traces(governance.load_rules(VAULT), traces.active(db, project, int(time.time())))
+        live = traces.context_section(items, task)  # GOV-02: quarantined traces never reach agents
     except (sqlite3.Error, ValueError) as exc:
         print(f"hive: traces skipped: {exc}", file=sys.stderr)
         live = ""
@@ -1165,6 +1244,53 @@ def tool_eval(golden=str(Path(__file__).with_name("eval_golden.json")), k=5):
     return "\n".join([f"Recall@{k} {found}/{n} = {found / n:.2f}   MRR {rr / n:.3f}"] + misses)
 
 
+def tool_audit(*args):
+    """GOV-03 CLI fallback: audit <bullet-id | trace:<n> | codex-stem>."""
+    import sqlite3
+    import governance
+    if len(args) != 1:
+        raise SystemExit("usage: hive audit <bullet-id | trace:<n> | codex-stem>")
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    db = open_db(DB_PATH)[0]  # heals a corrupt index
+    try:
+        return "\n".join(governance.audit(VAULT, db, CFG["ledger"], args[0], int(time.time())))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    finally:
+        db.close()
+
+
+def tool_quarantine(*args):
+    """GOV-01 CLI fallback: quarantine --session X | --agent Y [--since T] [--reason R] | --release ID | --list."""
+    import argparse
+    import sqlite3
+    import governance
+    p = argparse.ArgumentParser(prog="hive quarantine")
+    p.add_argument("--session", default="")
+    p.add_argument("--agent", default="")
+    p.add_argument("--since", default="")
+    p.add_argument("--reason", default="")
+    p.add_argument("--release", default="")
+    p.add_argument("--list", action="store_true")
+    a = p.parse_args(args)
+    if a.list:
+        rules = governance.load_rules(VAULT)
+        return "\n".join(f"{r['id']} session={r['session'] or '*'} agent={r['agent'] or '*'} since={r['since']} "
+                         f"{r['reason']}" for r in rules) or "quarantine: no active rules"
+    if a.release:
+        n = governance.release(VAULT, a.release)
+        return f"quarantine: released {a.release}" if n else f"quarantine: no rule {a.release}"
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    db = open_db(DB_PATH)[0]  # heals a corrupt index
+    try:
+        rule, counts = governance.quarantine(VAULT, db, a.session, a.agent, a.since, a.reason, int(time.time()))
+    except ValueError as exc:
+        raise SystemExit(f"quarantine: {exc}")
+    finally:
+        db.close()
+    return f"quarantine: {rule['id']} " + " ".join(f"{k}={v}" for k, v in counts.items())
+
+
 def tool_codex(*args):
     """CODEX-02 CLI fallback: `codex write <project> <record.json>` -> immutable codices/<project>/ note."""
     import datetime
@@ -1178,11 +1304,13 @@ def tool_codex(*args):
     except (OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"codex: cannot read record: {exc}")
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    db = open_db(DB_PATH)[0]  # heals a corrupt index
     try:
         with db:
             path = codex.write(VAULT, db, args[1], rec, ledger.resolve_agent(), ledger.resolve_session(),
                                datetime.date.today().isoformat(), int(time.time()))
+            import traces
+            traces.propose(VAULT, db, validate_slug(args[1]), int(time.time()))  # GOV-04
     except ValueError as exc:
         raise SystemExit(str(exc))
     finally:
@@ -1204,7 +1332,7 @@ def tool_trace(*args):
     else:
         raise SystemExit("usage: hive trace add <project> <kind> <target> <summary> | hive trace list <project>")
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    db = open_db(DB_PATH)[0]  # heals a corrupt index
     try:
         now = int(time.time())
         if args[0] == "add":
@@ -1212,8 +1340,11 @@ def tool_trace(*args):
                 tid = traces.add(db, project, kind, target, summary, ledger.resolve_agent(), ledger.resolve_session(), now)
             except ValueError as exc:
                 raise SystemExit(f"trace: {exc}")
-            return f"trace: {kind} #{tid} on {target} ({project})"
-        rows = traces.active(db, project, now)
+            proposed = traces.propose(VAULT, db, project, now)  # GOV-04
+            return f"trace: {kind} #{tid} on {target} ({project})" + "".join(
+                f"\n  proposal written to: {p}" for p in proposed)
+        import governance
+        rows = governance.visible_traces(governance.load_rules(VAULT), traces.active(db, project, now))
         if not rows:
             return f"trace: no active traces for {project}"
         return "\n".join(f"{t['kind']:<10} {w:.2f}  {t['target']}  {t['summary']} "
@@ -1331,8 +1462,20 @@ def tool_curate(*args):
     parser.add_argument("--project")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--config")
+    parser.add_argument("--conflicts", action="store_true", help="QUOR-05: judge playbook conflicts into inbox/")
     parsed = parser.parse_args(args)
     cfg = load_config(cli_config=parsed.config)
+    if parsed.conflicts:
+        res = curate.run_curate_conflicts(cfg["vault"], parsed.project, dry_run=parsed.dry_run,
+                                          config_path=parsed.config)
+        if res["skipped"]:
+            return f"curate --conflicts: {res['model']} ({res['reason']})"
+        out = f"curate --conflicts: model={res['model']} conflicts={res['conflicts']} verdicts={res['verdicts']}"
+        out += "".join(f"\n  rejected: {r}" for r in res.get("rejected", []))
+        if res.get("reason"):
+            out += f"\n  {res['reason']}"
+        verb = "would write (dry run)" if res["dry_run"] else "proposal written to"
+        return out + (f"\n  {verb}: {res['proposal_file']}" if res["proposal_file"] else "")
     res = curate.run_curate(
         ledger_path=cfg["ledger"],
         vault_path=cfg["vault"],
@@ -1406,7 +1549,7 @@ def main(argv=None):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex,
+        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex, "quarantine": tool_quarantine, "audit": tool_audit,
     }
     if cmd not in commands:
         print(__doc__)

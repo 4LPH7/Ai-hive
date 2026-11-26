@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hive
+import quorum
 
 VAULT = Path(os.environ.get("HIVE_VAULT", r"D:\Valut\OBS"))
 PROJECTS = Path(os.environ.get("HIVE_PROJECTS", r"D:\PROJECTS"))
@@ -270,13 +271,13 @@ def net(b, today_date=None):
     return b["helpful"] - b["harmful"] - bullet_decay(b, today_date)
 
 
-def apply_ops(sections, ops, today=None):
+def apply_ops(sections, ops, today=None, reserved=()):
     """Pure: returns (new_sections, report). ops: [{type: ADD, section, content} | {type: TAG, id, tag}]."""
     t_date = datetime.date.fromisoformat(today) if today else datetime.date.today()
     new = {name: [dict(b) for b in bullets] for name, bullets in sections.items()}
     by_id = {b["id"]: b for bullets in new.values() for b in bullets}
     report = {"added": [], "reinforced": [], "tagged": 0, "rejected": [], "pruned": []}
-    next_n = max((int(i.split("-")[1]) for i in by_id), default=0) + 1
+    next_n = max((int(i.split("-")[1]) for i in [*by_id, *reserved]), default=0) + 1  # retired ids never reissued
     adds = 0
     for op in ops if isinstance(ops, list) else []:
         kind = str(op.get("type", "")).upper() if isinstance(op, dict) else ""
@@ -338,14 +339,42 @@ def apply_ops(sections, ops, today=None):
     return new, report
 
 
+def helpful_tags(ops, live_ids, session, agent):
+    """QUOR-02 evidence from helpful TAG ops on live bullets: [(id, session, agent, hint)]. An op may name the
+    session it speaks for (`ledger score` credits the scored session) and an `evidence` hint (`test_pass`)."""
+    out = []
+    for op in ops if isinstance(ops, list) else []:
+        if not isinstance(op, dict) or str(op.get("type", "")).upper() != "TAG" or op.get("id") not in live_ids:
+            continue
+        if op.get("tag") == "helpful" or (not op.get("tag") and op.get("helpful")):
+            out.append((op["id"], str(op.get("session") or session), agent, op.get("evidence", "")))
+    return out
+
+
 def apply(scope, ops, today=None):
     """Load, apply ops under atomic lock, save, return report."""
     path = scope_path(scope)
     path.parent.mkdir(parents=True, exist_ok=True)
     with PlaybookLock(path):
         current = load(scope)
-        new_sections, report = apply_ops(current, ops, today=today)
+        meta_file = quorum.meta_path(path)
+        meta = quorum.load(meta_file)
+        new_sections, report = apply_ops(current, ops, today=today, reserved=meta.keys())
         save(scope, new_sections, today=today)
+        import ledger
+        session, agent = ledger.resolve_session(), ledger.resolve_agent()
+        live = {b["id"] for bullets in new_sections.values() for b in bullets}
+        evidence = helpful_tags(ops, live, session, agent)
+        # QUOR-03: another session independently proposing the same lesson is a confirmation
+        evidence += [(i, session, agent, "") for i in report["reinforced"] if i in live]
+        # QUOR-04: conflicts inside this playbook gate promotion and are reported; lines are never touched
+        pairs = quorum.conflicts([b for bullets in new_sections.values() for b in bullets])
+        if report["added"] or report["pruned"] or evidence:  # QUOR-01/02, PROV-04: sidecar, same lock
+            base = quorum.reconcile(meta, report["added"], report["pruned"], session, agent, int(time.time()))
+            meta = quorum.displace(base, quorum.add_evidence(base, evidence, quorum.gates(base, pairs)), pairs)
+            quorum.save(meta_file, meta)
+        quorum.write_report(VAULT / "_meta" / "_conflicts.md", slugify(scope), pairs, meta,
+                            today or time.strftime("%Y-%m-%d"))
     try:  # PROV-02/04: who merged which bullets, at which commit; fail-open
         import hashlib
         import ledger
@@ -359,11 +388,18 @@ def apply(scope, ops, today=None):
 
 def select(scopes, task="", limit=INJECT_LIMIT):
     """Top bullets across scopes: net evidence first, task-term overlap as tie-breaker boost."""
+    import governance
     want = tokens(task)
     pool = []
+    rules = governance.load_rules(VAULT)
     for scope in scopes:
+        meta = quorum.load(quorum.meta_path(scope_path(scope)))  # QUOR-03: only injectable states
         for name, bullets in load(scope).items():
             for b in bullets:
+                if not quorum.injectable(quorum.state_of(meta, b["id"])):
+                    continue
+                if governance.bullet_hidden(rules, meta.get(b["id"], {})):  # GOV-02
+                    continue
                 overlap = len(want & tokens(b["content"])) if want else 0
                 pool.append(((net(b) + 1) * (1 + overlap), scope, name, b))
     pool.sort(key=lambda x: -x[0])
@@ -439,7 +475,7 @@ def emit_hot_files(transcript, session):
         import sqlite3
         import time
         import traces
-        db = sqlite3.connect(str(hive.load_config()["db"]), timeout=10)
+        db = hive.open_db(hive.load_config()["db"])[0]  # heals a corrupt index
         try:
             with db:
                 traces.emit_hot_files(db, transcript, "claude", session, int(time.time()))
@@ -501,7 +537,9 @@ def main(argv):
             print(f"ace apply: invalid JSON ({exc}); nothing changed", file=sys.stderr)
             return 1
         ops = payload.get("operations", []) + payload.get("bullet_tags", []) if isinstance(payload, dict) else payload
-        ops = [dict(o, type=o.get("type", "TAG")) for o in ops if isinstance(o, dict)]
+        # agent-written deltas cannot name a session or claim test evidence (QUOR-02 trust boundary)
+        ops = [{k: v for k, v in dict(o, type=o.get("type", "TAG")).items() if k not in quorum.TRUSTED_ONLY_FIELDS}
+               for o in ops if isinstance(o, dict)]
         report = apply(rest[0], ops)
         print(json.dumps(report, indent=1))
         return 0

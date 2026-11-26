@@ -114,6 +114,9 @@ enum Commands {
         project: Option<String>,
         #[arg(long)]
         dry_run: bool,
+        /// QUOR-05: judge playbook conflicts and write a cited proposal to inbox/ only
+        #[arg(long)]
+        conflicts: bool,
     },
     /// ACE playbook curator operations
     Ace {
@@ -124,6 +127,26 @@ enum Commands {
     Trace {
         #[command(subcommand)]
         cmd: TraceCommands,
+    },
+    /// GOV-03: provenance chain of a bullet id, trace:<n> or codex file stem
+    Audit { target: String },
+    /// GOV-01: reversible quarantine of everything from a session or agent (rules only; items never edited)
+    Quarantine {
+        #[arg(long, default_value = "")]
+        session: String,
+        #[arg(long, default_value = "")]
+        agent: String,
+        /// YYYY-MM-DD, ISO datetime or epoch seconds
+        #[arg(long, default_value = "")]
+        since: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+        /// Remove the rule with this id
+        #[arg(long)]
+        release: Option<String>,
+        /// Show active rules
+        #[arg(long)]
+        list: bool,
     },
     /// Session codices: immutable vault notes from hive-ace checkpoint records
     Codex {
@@ -402,7 +425,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
-            Commands::Curate { project, dry_run } => {
+            Commands::Curate {
+                project,
+                dry_run,
+                conflicts: true,
+            } => {
+                let res = ai_hive::curate::run_curate_conflicts(
+                    &cfg.vault,
+                    project.as_deref(),
+                    dry_run,
+                    cli.config.as_deref(),
+                    None,
+                )?;
+                if res.skipped {
+                    println!(
+                        "curate --conflicts: {} ({})",
+                        res.model,
+                        res.reason.unwrap_or_default()
+                    );
+                } else {
+                    println!(
+                        "curate --conflicts: model={} conflicts={} verdicts={}",
+                        res.model, res.conflicts, res.verdicts
+                    );
+                    if let Some(file) = res.proposal_file {
+                        let verb = if res.dry_run {
+                            "would write (dry run)"
+                        } else {
+                            "proposal written to"
+                        };
+                        println!("  {verb}: {}", file);
+                    }
+                }
+            }
+            Commands::Curate {
+                project, dry_run, ..
+            } => {
                 let res = ai_hive::curate::run_curate(
                     &cfg.ledger,
                     &cfg.vault,
@@ -426,7 +484,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(parent) = cfg.db.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                let conn = rusqlite::Connection::open(&cfg.db)?;
+                let conn = ai_hive::index::open_db(&cfg.db)?.0; // heals a corrupt index
                 conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")?;
                 let now = chrono::Utc::now().timestamp();
                 match cmd {
@@ -453,9 +511,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             target,
                             project
                         );
+                        // GOV-04: >= 2 sessions on a DEAD_END / RECENT_FIX drafts an inbox ADD proposal
+                        for p in ai_hive::trace::propose(&cfg.vault, &conn, &project, now)? {
+                            println!("  proposal written to: {}", p.display());
+                        }
                     }
                     TraceCommands::List { project } => {
-                        let rows = ai_hive::trace::active(&conn, &project, now)?;
+                        let rows = ai_hive::governance::visible_traces(
+                            &ai_hive::governance::load_rules(&cfg.vault),
+                            ai_hive::trace::active(&conn, &project, now)?,
+                        );
                         if rows.is_empty() {
                             println!("trace: no active traces for {}", project);
                         }
@@ -469,6 +534,78 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            Commands::Audit { target } => {
+                if let Some(parent) = cfg.db.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let conn = ai_hive::index::open_db(&cfg.db)?.0; // heals a corrupt index
+                let lines = ai_hive::governance::audit(
+                    &cfg.vault,
+                    &conn,
+                    &cfg.ledger,
+                    &target,
+                    chrono::Utc::now().timestamp(),
+                )?;
+                println!("{}", lines.join("\n"));
+            }
+            Commands::Quarantine {
+                session,
+                agent,
+                since,
+                reason,
+                release,
+                list,
+            } => {
+                use ai_hive::governance as gov;
+                if list {
+                    let rules = gov::load_rules(&cfg.vault);
+                    if rules.is_empty() {
+                        println!("quarantine: no active rules");
+                    }
+                    for r in rules {
+                        let star = |s: &str| {
+                            if s.is_empty() {
+                                "*".to_string()
+                            } else {
+                                s.to_string()
+                            }
+                        };
+                        println!(
+                            "{} session={} agent={} since={} {}",
+                            r.id,
+                            star(&r.session),
+                            star(&r.agent),
+                            r.since,
+                            r.reason
+                        );
+                    }
+                } else if let Some(id) = release {
+                    if gov::release(&cfg.vault, &id)? > 0 {
+                        println!("quarantine: released {id}");
+                    } else {
+                        println!("quarantine: no rule {id}");
+                    }
+                } else {
+                    if let Some(parent) = cfg.db.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    let conn = ai_hive::index::open_db(&cfg.db)?.0; // heals a corrupt index
+                    let (rule, counts) = gov::quarantine(
+                        &cfg.vault,
+                        &conn,
+                        &session,
+                        &agent,
+                        &since,
+                        &reason,
+                        chrono::Utc::now().timestamp(),
+                    )?;
+                    let parts: Vec<String> = gov::KINDS
+                        .iter()
+                        .map(|k| format!("{k}={}", counts[k]))
+                        .collect();
+                    println!("quarantine: {} {}", rule.id, parts.join(" "));
+                }
+            }
             Commands::Codex {
                 cmd:
                     CodexCommands::Write {
@@ -477,7 +614,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
             } => {
                 let rec = ai_hive::codex::parse(&fs::read_to_string(&record_file)?)?;
-                let conn = rusqlite::Connection::open(&cfg.db)?;
+                let conn = ai_hive::index::open_db(&cfg.db)?.0; // heals a corrupt index
                 conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")?;
                 let path = ai_hive::codex::write(
                     &cfg.vault,
@@ -494,6 +631,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     path.display(),
                     rec.dead_ends.len()
                 );
+                let slug = ai_hive::common::validate_slug(&project)?;
+                for p in ai_hive::trace::propose(
+                    &cfg.vault,
+                    &conn,
+                    &slug,
+                    chrono::Utc::now().timestamp(),
+                )? {
+                    println!("  proposal written to: {}", p.display());
+                }
             }
             Commands::Ace { cmd } => {
                 let vault = cfg.vault;
@@ -533,13 +679,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("ace: applied {} changes to {}", changed, scope);
                     }
                     AceCommands::Show { scope, task } => {
-                        let sections = load(&vault, &scope)?;
+                        let sections = ai_hive::ace::load_injectable(&vault, &scope)?;
                         let t = task.as_deref().unwrap_or("");
                         let bullets = select_bullets(&sections, t, 12);
                         println!("{}", format_bullets(&bullets));
                     }
                     AceCommands::HookStart { scope } => {
-                        let sections = load(&vault, &scope)?;
+                        let sections = ai_hive::ace::load_injectable(&vault, &scope)?;
                         let bullets = select_bullets(&sections, "", 8);
                         let bullet_ids: Vec<String> =
                             bullets.iter().map(|b| b.id.clone()).collect();

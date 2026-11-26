@@ -22,7 +22,12 @@ CREATE TABLE IF NOT EXISTS traces(id INTEGER PRIMARY KEY AUTOINCREMENT, project 
     kind TEXT NOT NULL, target TEXT NOT NULL, summary TEXT NOT NULL, agent TEXT NOT NULL,
     session_id TEXT NOT NULL, w0 REAL NOT NULL, created_at INTEGER NOT NULL, half_life_h REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS traces_project ON traces(project, kind, target);
+CREATE TABLE IF NOT EXISTS trace_sessions(trace_id INTEGER NOT NULL, session_id TEXT NOT NULL,
+    PRIMARY KEY(trace_id, session_id));
 """
+# GOV-04: kinds that become playbook ADD proposals once >= PROPOSE_SESSIONS distinct sessions left them
+PROPOSE_SECTIONS = {"DEAD_END": "pitfalls", "RECENT_FIX": "strategies"}
+PROPOSE_SESSIONS = 2
 
 
 def strength(w0, created_at, now, half_life_h):
@@ -58,10 +63,13 @@ def add(db, project, kind, target, summary, agent, session_id, now):
             w = min(strength(w0, created, now, hl) + 1.0, MAX_STRENGTH)
             db.execute("UPDATE traces SET w0=?, created_at=?, summary=?, agent=?, session_id=? WHERE id=?",
                        (w, now, summary, agent, session_id, tid))
+            db.execute("INSERT OR IGNORE INTO trace_sessions VALUES (?, ?)", (tid, session_id))
             return tid
         cur = db.execute("INSERT INTO traces(project, kind, target, summary, agent, session_id, w0, created_at, "
                          "half_life_h) VALUES (?,?,?,?,?,?,1.0,?,?)",
                          (project, kind, target, summary, agent, session_id, now, KINDS[kind]))
+        if not ledger.is_anonymous(session_id):
+            db.execute("INSERT OR IGNORE INTO trace_sessions VALUES (?, ?)", (cur.lastrowid, session_id))
         return cur.lastrowid
 
 
@@ -72,6 +80,7 @@ def active(db, project, now):
     if db.execute("SELECT 1 FROM traces WHERE created_at < ? LIMIT 1", (cutoff,)).fetchone():
         with db:  # write + fsync only when something is stale: reads stay read-only (Phase 7 gate < 10 ms)
             db.execute("DELETE FROM traces WHERE created_at < ?", (cutoff,))
+            db.execute("DELETE FROM trace_sessions WHERE trace_id NOT IN (SELECT id FROM traces)")
     cols = ("id", "project", "kind", "target", "summary", "agent", "session_id", "w0", "created_at", "half_life_h")
     rows = db.execute(f"SELECT {', '.join(cols)} FROM traces WHERE project=?", (project,)).fetchall()
     out = []
@@ -156,3 +165,44 @@ def emit_hot_files(db, transcript_path, agent, session_id, now):
             add(db, where[0], "HOT_FILE", where[1], f"{n} failed tool calls in one session", agent, session_id, now)
             emitted.append(where)
     return emitted
+
+
+def propose(vault, db, project, now):
+    """GOV-04: for each active DEAD_END / RECENT_FIX trace that >= 2 distinct identifiable sessions left,
+    write one playbook ADD proposal to inbox/ (never applied; quarantined traces skipped). The file name is
+    stable per (project, kind, target), so reruns never duplicate. Returns the paths written."""
+    import datetime
+    import hashlib
+    import governance
+    from pathlib import Path
+    rules = governance.load_rules(vault)
+    written = []
+    for t, w in governance.visible_traces(rules, active(db, project, now)):
+        section = PROPOSE_SECTIONS.get(t["kind"])
+        if not section:
+            continue
+        sessions = [s for (s,) in db.execute("SELECT session_id FROM trace_sessions WHERE trace_id=? "
+                                              "ORDER BY session_id", (t["id"],))]
+        if len(sessions) < PROPOSE_SESSIONS:
+            continue
+        key = hashlib.sha256(f"{project}|{t['kind']}|{t['target']}".encode("utf-8")).hexdigest()[:8]
+        path = Path(vault) / "inbox" / f"trace-{ace.slugify(project)}-{key}.md"
+        if path.exists():
+            continue
+        today = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).strftime("%Y-%m-%d")
+        lesson = f"{t['target']}: {t['summary']}"
+        # sorted keys + compact separators: byte-identical to serde_json's json! in src/trace.rs
+        delta = json.dumps({"operations": [{"type": "ADD", "section": section, "content": lesson}]},
+                           sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        text = "\n".join([
+            "---", "type: note", f"project: {project}", "agent: claude", "status: active", f"updated: {today}",
+            f"source: hive traces (trace {t['id']}, sessions {', '.join(sessions)})", "---",
+            f"# Playbook ADD proposal: {t['kind']} {t['target']}", "",
+            f"> {len(sessions)} independent sessions left this {t['kind']} trace (strength {w:.2f}). Nothing was",
+            "> applied. If it holds, save the delta below to a file and run `hive ace apply "
+            f"{project} <file>`; it enters as a scout and needs its own quorum.", "",
+            "```json", delta, "```", ""])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8", newline="\n")
+        written.append(path)
+    return written
