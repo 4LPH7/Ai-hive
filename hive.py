@@ -250,12 +250,76 @@ def parse_note(text):
     return meta, (heading.group(1).strip() if heading else ""), body
 
 
+RECOVERED_SUFFIX = ".recovered"
+
+
+def _healthy(path):
+    """True when the SQLite file is absent (it will be created) or passes PRAGMA quick_check."""
+    if not Path(path).exists():
+        return True
+    try:
+        conn = sqlite3.connect(str(path), timeout=10)
+        try:
+            return conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _move_aside(path):
+    """Rename a corrupt db and its -wal/-shm to *.corrupt-<time> (kept for inspection). False if it is locked."""
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    try:
+        os.replace(path, f"{path}.corrupt-{stamp}")
+    except OSError:
+        return False
+    for side in ("-wal", "-shm"):
+        try:
+            os.replace(f"{path}{side}", f"{path}{side}.corrupt-{stamp}")
+        except OSError:
+            pass
+    return True
+
+
+def open_db(path):
+    """Connection to the disposable index at `path`, healing corruption: a corrupt file is moved aside and
+    rebuilt; when another process still holds it open, every new process shares `<path>.recovered` instead.
+    Returns (connection, path actually used)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    target = path
+    if not _healthy(path):
+        print(f"hive: {path} is corrupt; rebuilding the index from the vault", file=sys.stderr)
+        if not _move_aside(path):
+            target = path.with_name(path.name + RECOVERED_SUFFIX)
+            if not _healthy(target) and not _move_aside(target):
+                raise sqlite3.DatabaseError(f"{path} and {target} are corrupt and locked")
+    conn = sqlite3.connect(str(target), timeout=10, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn, target
+
+
 class Index:
     def __init__(self, vault=VAULT, db_path=DB_PATH):
         self.vault = Path(vault)
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(db_path), timeout=10, check_same_thread=False)
-        self.db.execute("PRAGMA journal_mode=WAL")
+        self.requested_path = Path(db_path)
+        self.db, self.db_path = open_db(self.requested_path)
+        self._init_schema()
+
+    def _recover(self, exc):
+        """A long-running process hit corruption: reopen through open_db once. False if not corruption."""
+        if not isinstance(exc, sqlite3.DatabaseError) or isinstance(exc, sqlite3.OperationalError):
+            return False
+        try:
+            self.db.close()
+        except sqlite3.Error:
+            pass
+        self.db, self.db_path = open_db(self.requested_path)
+        self._init_schema()
+        return True
+
+    def _init_schema(self):
         if self.db.execute("PRAGMA user_version").fetchone()[0] != 4:
             # derived index: a schema change just rebuilds it from the vault
             self.db.executescript("DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS notes_fts;")
@@ -321,7 +385,15 @@ class Index:
         return changed
 
     def search(self, query, project="", limit=8, scope="project"):
-        """BM25 (title x5) re-ranked by note type, status and project match."""
+        """BM25 (title x5) re-ranked by note type, status and project match. Heals a corrupt index once."""
+        try:
+            return self._search(query, project, limit, scope)
+        except sqlite3.DatabaseError as exc:
+            if not self._recover(exc):
+                raise
+            return self._search(query, project, limit, scope)
+
+    def _search(self, query, project="", limit=8, scope="project"):
         self.refresh()
         terms = re.findall(r"\w+", query.lower())
         if not terms:
@@ -1179,7 +1251,7 @@ def tool_audit(*args):
     if len(args) != 1:
         raise SystemExit("usage: hive audit <bullet-id | trace:<n> | codex-stem>")
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    db = open_db(DB_PATH)[0]  # heals a corrupt index
     try:
         return "\n".join(governance.audit(VAULT, db, CFG["ledger"], args[0], int(time.time())))
     except ValueError as exc:
@@ -1209,7 +1281,7 @@ def tool_quarantine(*args):
         n = governance.release(VAULT, a.release)
         return f"quarantine: released {a.release}" if n else f"quarantine: no rule {a.release}"
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    db = open_db(DB_PATH)[0]  # heals a corrupt index
     try:
         rule, counts = governance.quarantine(VAULT, db, a.session, a.agent, a.since, a.reason, int(time.time()))
     except ValueError as exc:
@@ -1232,7 +1304,7 @@ def tool_codex(*args):
     except (OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"codex: cannot read record: {exc}")
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    db = open_db(DB_PATH)[0]  # heals a corrupt index
     try:
         with db:
             path = codex.write(VAULT, db, args[1], rec, ledger.resolve_agent(), ledger.resolve_session(),
@@ -1260,7 +1332,7 @@ def tool_trace(*args):
     else:
         raise SystemExit("usage: hive trace add <project> <kind> <target> <summary> | hive trace list <project>")
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    db = open_db(DB_PATH)[0]  # heals a corrupt index
     try:
         now = int(time.time())
         if args[0] == "add":

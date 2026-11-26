@@ -108,20 +108,102 @@ pub struct Index {
     pub vault: PathBuf,
     pub conn: Connection,
     last_refresh: Option<Instant>,
+    /// Path asked for; None for in-memory indexes (nothing to heal).
+    requested: Option<PathBuf>,
+    /// Path actually opened (the `.recovered` sibling while a corrupt file is still locked).
+    pub db_path: Option<PathBuf>,
+}
+
+pub const RECOVERED_SUFFIX: &str = ".recovered";
+
+/// True when the SQLite file is absent (it will be created) or passes PRAGMA quick_check.
+fn healthy(path: &Path) -> bool {
+    if !path.exists() {
+        return true;
+    }
+    Connection::open(path)
+        .and_then(|c| c.query_row("PRAGMA quick_check", [], |r| r.get::<_, String>(0)))
+        .map(|s| s == "ok")
+        .unwrap_or(false)
+}
+
+/// Rename a corrupt db and its -wal/-shm to *.corrupt-<time> (kept for inspection). False if it is locked.
+fn move_aside(path: &Path) -> bool {
+    let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+    let with = |suffix: &str| PathBuf::from(format!("{}{suffix}", path.display()));
+    if fs::rename(path, with(&format!(".corrupt-{stamp}"))).is_err() {
+        return false;
+    }
+    for side in ["-wal", "-shm"] {
+        let _ = fs::rename(with(side), with(&format!("{side}.corrupt-{stamp}")));
+    }
+    true
+}
+
+/// Connection to the disposable index at `path`, healing corruption: a corrupt file is moved aside and rebuilt;
+/// when another process still holds it open, every new process shares `<path>.recovered` instead. Returns
+/// (connection, path actually used). Mirror of hive.py open_db.
+pub fn open_db(path: &Path) -> Result<(Connection, PathBuf), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut target = path.to_path_buf();
+    if !healthy(path) {
+        eprintln!(
+            "hive: {} is corrupt; rebuilding the index from the vault",
+            path.display()
+        );
+        if !move_aside(path) {
+            target = PathBuf::from(format!("{}{RECOVERED_SUFFIX}", path.display()));
+            if !healthy(&target) && !move_aside(&target) {
+                return Err(format!(
+                    "{} and {} are corrupt and locked",
+                    path.display(),
+                    target.display()
+                ));
+            }
+        }
+    }
+    let conn = Connection::open(&target).map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")
+        .map_err(|e| e.to_string())?;
+    Ok((conn, target))
+}
+
+/// Errors SQLite raises for a damaged file (not for a busy or locked one).
+fn is_corruption(err: &str) -> bool {
+    err.contains("malformed") || err.contains("not a database")
 }
 
 impl Index {
     pub fn new(vault: Option<PathBuf>, db_path: Option<PathBuf>) -> Result<Self, String> {
         let v = vault.unwrap_or_else(default_vault);
         let db = db_path.unwrap_or_else(default_db_path);
-        if let Some(parent) = db.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
+        let (conn, used) = open_db(&db)?;
+        Self::init_schema(&conn)?;
+        Ok(Self {
+            vault: v,
+            conn,
+            last_refresh: None,
+            requested: Some(db),
+            db_path: Some(used),
+        })
+    }
 
-        let conn = Connection::open(&db).map_err(|e| e.to_string())?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA timeout=10000;")
-            .map_err(|e| e.to_string())?;
+    /// A long-running process hit corruption: reopen through open_db once.
+    fn recover(&mut self) -> Result<(), String> {
+        let Some(req) = self.requested.clone() else {
+            return Err("in-memory index cannot be recovered".into());
+        };
+        let (conn, used) = open_db(&req)?;
+        Self::init_schema(&conn)?;
+        self.conn = conn;
+        self.db_path = Some(used);
+        self.last_refresh = None;
+        Ok(())
+    }
 
+    fn init_schema(conn: &Connection) -> Result<(), String> {
         let user_version: i32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap_or(0);
@@ -138,12 +220,7 @@ impl Index {
              CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
                 path UNINDEXED, title, meta, body, tokenize='porter unicode61');",
         ).map_err(|e| e.to_string())?;
-
-        Ok(Self {
-            vault: v,
-            conn,
-            last_refresh: None,
-        })
+        Ok(())
     }
 
     pub fn in_memory() -> Result<Self, String> {
@@ -160,6 +237,8 @@ impl Index {
             vault: PathBuf::from("."),
             conn,
             last_refresh: None,
+            requested: None,
+            db_path: None,
         })
     }
 
@@ -341,7 +420,23 @@ impl Index {
         Ok(changed)
     }
 
+    /// BM25 search; heals a corrupt index once (mirror of hive.py Index.search).
     pub fn search(
+        &mut self,
+        query: &str,
+        project: &str,
+        limit: usize,
+        scope: &str,
+    ) -> Result<Vec<Hit>, String> {
+        match self.search_inner(query, project, limit, scope) {
+            Err(e) if is_corruption(&e) && self.recover().is_ok() => {
+                self.search_inner(query, project, limit, scope)
+            }
+            other => other,
+        }
+    }
+
+    fn search_inner(
         &mut self,
         query: &str,
         project: &str,
@@ -526,6 +621,47 @@ impl Index {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_corrupt_index_is_moved_aside_and_rebuilt() {
+        let root = std::env::temp_dir().join(format!("hive-recover-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let vault = root.join("vault");
+        fs::create_dir_all(vault.join("projects").join("demo")).unwrap();
+        fs::write(
+            vault.join("projects").join("demo").join("keys.md"),
+            "---\ntype: note\nproject: demo\nagent: claude\nstatus: active\nupdated: 2026-11-26\n---\n# Cache keys\n\nzebracache rule\n",
+        )
+        .unwrap();
+        let db = root.join("hive.sqlite");
+        let mut bytes = b"SQLite format 3\x00".to_vec();
+        bytes.extend(std::iter::repeat_n(0xffu8, 4096));
+        fs::write(&db, bytes).unwrap();
+        assert!(!healthy(&db));
+        let mut idx = Index::new(Some(vault), Some(db.clone())).unwrap();
+        let hits = idx.search("zebracache", "demo", 5, "project").unwrap();
+        assert_eq!(
+            hits.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec!["projects/demo/keys.md"]
+        );
+        assert_eq!(idx.db_path.as_deref(), Some(db.as_path()));
+        let moved = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("hive.sqlite.corrupt-")
+            })
+            .count();
+        assert_eq!(moved, 1, "kept for inspection");
+        assert!(
+            is_corruption("database disk image is malformed")
+                && !is_corruption("database is locked")
+        );
+        drop(idx);
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn test_fts5_in_memory() {

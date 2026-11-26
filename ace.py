@@ -475,7 +475,7 @@ def emit_hot_files(transcript, session):
         import sqlite3
         import time
         import traces
-        db = sqlite3.connect(str(hive.load_config()["db"]), timeout=10)
+        db = hive.open_db(hive.load_config()["db"])[0]  # heals a corrupt index
         try:
             with db:
                 traces.emit_hot_files(db, transcript, "claude", session, int(time.time()))

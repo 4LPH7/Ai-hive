@@ -484,7 +484,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(parent) = cfg.db.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                let conn = rusqlite::Connection::open(&cfg.db)?;
+                let conn = ai_hive::index::open_db(&cfg.db)?.0; // heals a corrupt index
                 conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")?;
                 let now = chrono::Utc::now().timestamp();
                 match cmd {
@@ -538,7 +538,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(parent) = cfg.db.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                let conn = rusqlite::Connection::open(&cfg.db)?;
+                let conn = ai_hive::index::open_db(&cfg.db)?.0; // heals a corrupt index
                 let lines = ai_hive::governance::audit(
                     &cfg.vault,
                     &conn,
@@ -589,7 +589,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(parent) = cfg.db.parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    let conn = rusqlite::Connection::open(&cfg.db)?;
+                    let conn = ai_hive::index::open_db(&cfg.db)?.0; // heals a corrupt index
                     let (rule, counts) = gov::quarantine(
                         &cfg.vault,
                         &conn,
@@ -614,7 +614,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
             } => {
                 let rec = ai_hive::codex::parse(&fs::read_to_string(&record_file)?)?;
-                let conn = rusqlite::Connection::open(&cfg.db)?;
+                let conn = ai_hive::index::open_db(&cfg.db)?.0; // heals a corrupt index
                 conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")?;
                 let path = ai_hive::codex::write(
                     &cfg.vault,
