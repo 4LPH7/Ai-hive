@@ -1237,6 +1237,8 @@ def tool_codex(*args):
         with db:
             path = codex.write(VAULT, db, args[1], rec, ledger.resolve_agent(), ledger.resolve_session(),
                                datetime.date.today().isoformat(), int(time.time()))
+            import traces
+            traces.propose(VAULT, db, validate_slug(args[1]), int(time.time()))  # GOV-04
     except ValueError as exc:
         raise SystemExit(str(exc))
     finally:
@@ -1266,7 +1268,9 @@ def tool_trace(*args):
                 tid = traces.add(db, project, kind, target, summary, ledger.resolve_agent(), ledger.resolve_session(), now)
             except ValueError as exc:
                 raise SystemExit(f"trace: {exc}")
-            return f"trace: {kind} #{tid} on {target} ({project})"
+            proposed = traces.propose(VAULT, db, project, now)  # GOV-04
+            return f"trace: {kind} #{tid} on {target} ({project})" + "".join(
+                f"\n  proposal written to: {p}" for p in proposed)
         import governance
         rows = governance.visible_traces(governance.load_rules(VAULT), traces.active(db, project, now))
         if not rows:

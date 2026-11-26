@@ -511,6 +511,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             target,
                             project
                         );
+                        // GOV-04: >= 2 sessions on a DEAD_END / RECENT_FIX drafts an inbox ADD proposal
+                        for p in ai_hive::trace::propose(&cfg.vault, &conn, &project, now)? {
+                            println!("  proposal written to: {}", p.display());
+                        }
                     }
                     TraceCommands::List { project } => {
                         let rows = ai_hive::governance::visible_traces(
@@ -627,6 +631,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     path.display(),
                     rec.dead_ends.len()
                 );
+                let slug = ai_hive::common::validate_slug(&project)?;
+                for p in ai_hive::trace::propose(
+                    &cfg.vault,
+                    &conn,
+                    &slug,
+                    chrono::Utc::now().timestamp(),
+                )? {
+                    println!("  proposal written to: {}", p.display());
+                }
             }
             Commands::Ace { cmd } => {
                 let vault = cfg.vault;

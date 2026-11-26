@@ -40,7 +40,9 @@ pub fn ensure_table(conn: &Connection) -> Result<(), String> {
         "CREATE TABLE IF NOT EXISTS traces(id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL,
             kind TEXT NOT NULL, target TEXT NOT NULL, summary TEXT NOT NULL, agent TEXT NOT NULL,
             session_id TEXT NOT NULL, w0 REAL NOT NULL, created_at INTEGER NOT NULL, half_life_h REAL NOT NULL);
-         CREATE INDEX IF NOT EXISTS traces_project ON traces(project, kind, target);",
+         CREATE INDEX IF NOT EXISTS traces_project ON traces(project, kind, target);
+         CREATE TABLE IF NOT EXISTS trace_sessions(trace_id INTEGER NOT NULL, session_id TEXT NOT NULL,
+            PRIMARY KEY(trace_id, session_id));",
     )
     .map_err(|e| e.to_string())
 }
@@ -95,6 +97,7 @@ pub fn add(
             params![w, now, summary, agent, session_id, id],
         )
         .map_err(|e| e.to_string())?;
+        record_session(conn, id, session_id)?;
         return Ok(id);
     }
     conn.execute(
@@ -103,7 +106,104 @@ pub fn add(
         params![project, kind, target, summary, agent, session_id, now, h],
     )
     .map_err(|e| e.to_string())?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    if !crate::ledger::is_anonymous(session_id) {
+        record_session(conn, id, session_id)?;
+    }
+    Ok(id)
+}
+
+/// GOV-04: remember each distinct identifiable session that left a trace.
+fn record_session(conn: &Connection, id: i64, session_id: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO trace_sessions VALUES (?1, ?2)",
+        params![id, session_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// GOV-04: kinds that become playbook ADD proposals once >= PROPOSE_SESSIONS distinct sessions left them.
+pub const PROPOSE_SECTIONS: [(&str, &str); 2] =
+    [("DEAD_END", "pitfalls"), ("RECENT_FIX", "strategies")];
+pub const PROPOSE_SESSIONS: usize = 2;
+
+/// GOV-04: one inbox/ playbook ADD proposal per active DEAD_END / RECENT_FIX trace left by >= 2 distinct
+/// identifiable sessions (never applied; quarantined traces skipped). The file name is stable per
+/// (project, kind, target), so reruns never duplicate. Returns the paths written. Mirror of traces.py.
+pub fn propose(
+    vault: &std::path::Path,
+    conn: &Connection,
+    project: &str,
+    now: i64,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let rules = crate::governance::load_rules(vault);
+    let mut written = Vec::new();
+    for (t, w) in crate::governance::visible_traces(&rules, active(conn, project, now)?) {
+        let Some(section) = PROPOSE_SECTIONS
+            .iter()
+            .find(|(k, _)| *k == t.kind)
+            .map(|(_, s)| *s)
+        else {
+            continue;
+        };
+        let mut stmt = conn
+            .prepare("SELECT session_id FROM trace_sessions WHERE trace_id=?1 ORDER BY session_id")
+            .map_err(|e| e.to_string())?;
+        let sessions: Vec<String> = stmt
+            .query_map(params![t.id], |r| r.get(0))
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .collect();
+        if sessions.len() < PROPOSE_SESSIONS {
+            continue;
+        }
+        let key = crate::common::sha256(format!("{project}|{}|{}", t.kind, t.target).as_bytes());
+        let path = vault.join("inbox").join(format!(
+            "trace-{}-{}.md",
+            crate::common::slugify(project),
+            &key[..8]
+        ));
+        if path.exists() {
+            continue;
+        }
+        let today = chrono::DateTime::from_timestamp(now, 0)
+            .unwrap_or_default()
+            .format("%Y-%m-%d")
+            .to_string();
+        let lesson = format!("{}: {}", t.target, t.summary);
+        let delta = serde_json::json!({"operations": [{"type": "ADD", "section": section, "content": lesson}]});
+        let text = [
+            "---".to_string(),
+            "type: note".into(),
+            format!("project: {project}"),
+            "agent: claude".into(),
+            "status: active".into(),
+            format!("updated: {today}"),
+            format!("source: hive traces (trace {}, sessions {})", t.id, sessions.join(", ")),
+            "---".into(),
+            format!("# Playbook ADD proposal: {} {}", t.kind, t.target),
+            String::new(),
+            format!(
+                "> {} independent sessions left this {} trace (strength {w:.2}). Nothing was",
+                sessions.len(),
+                t.kind
+            ),
+            format!(
+                "> applied. If it holds, save the delta below to a file and run `hive ace apply {project} <file>`; it enters as a scout and needs its own quorum."
+            ),
+            String::new(),
+            "```json".into(),
+            delta.to_string(),
+            "```".into(),
+            String::new(),
+        ]
+        .join("\n");
+        std::fs::create_dir_all(vault.join("inbox")).map_err(|e| e.to_string())?;
+        std::fs::write(&path, text).map_err(|e| e.to_string())?;
+        written.push(path);
+    }
+    Ok(written)
 }
 
 /// Traces still above `MIN_STRENGTH`, strongest first, after purging anything older than 7 days.
@@ -121,6 +221,11 @@ pub fn active(conn: &Connection, project: &str, now: i64) -> Result<Vec<(Trace, 
         // write + fsync only when something is stale: reads stay read-only (Phase 7 gate < 10 ms)
         conn.execute("DELETE FROM traces WHERE created_at < ?1", params![cutoff])
             .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM trace_sessions WHERE trace_id NOT IN (SELECT id FROM traces)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
     }
     let mut stmt = conn
         .prepare(
@@ -230,6 +335,50 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM traces", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn test_two_sessions_propose_once_and_hot_file_never() {
+        let c = db();
+        let vault = std::env::temp_dir().join(format!("hive-propose-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&vault);
+        add(
+            &c,
+            "demo",
+            "DEAD_END",
+            "src/a.rs",
+            "patching breaks link",
+            "claude",
+            "s1",
+            0,
+        )
+        .unwrap();
+        assert!(propose(&vault, &c, "demo", 0).unwrap().is_empty());
+        add(
+            &c,
+            "demo",
+            "DEAD_END",
+            "src/a.rs",
+            "patching breaks link",
+            "codex",
+            "s2",
+            H,
+        )
+        .unwrap();
+        add(&c, "demo", "HOT_FILE", "src/d.rs", "x", "claude", "s1", H).unwrap();
+        add(&c, "demo", "HOT_FILE", "src/d.rs", "x", "codex", "s2", H).unwrap();
+        let written = propose(&vault, &c, "demo", H).unwrap();
+        assert_eq!(written.len(), 1);
+        let text = std::fs::read_to_string(&written[0]).unwrap();
+        assert!(
+            text.contains(r#""section":"pitfalls""#) && text.contains("sessions s1, s2"),
+            "{text}"
+        );
+        assert!(
+            propose(&vault, &c, "demo", H).unwrap().is_empty(),
+            "never duplicated"
+        );
+        let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]
