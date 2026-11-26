@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   injected (`ace.select`, `load_injectable`). Patterns are literal substrings; globs support `*` and `?` only,
   with identical semantics in both languages. Phase 8 gate covered by Python and Rust end-to-end tests.
 
+### Fixed
+- **`est_tokens` parity**: the Rust estimator counted UTF-8 bytes and a newline after every line, including a
+  final line without one; it now counts characters and real line endings like `hive.est_tokens`, so budgets,
+  packing and gates agree across languages (pinned on 14 cases incl. CRLF and non-ASCII).
+
 ### Changed
 - **Signal-preserving offload excerpt (`artifacts.excerpt`, `artifact::excerpt`)**: an offloaded result's inline
   excerpt keeps the head (55% of 400 tokens), the tail (15%) and every error/fatal/panic/traceback/exception/

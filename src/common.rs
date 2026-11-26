@@ -59,11 +59,14 @@ pub fn est_tokens(text: &str) -> usize {
     let mut prose_chars = 0usize;
     let mut in_fence = false;
 
-    for line in text.lines() {
+    // Parity with hive.est_tokens (`splitlines(keepends=True)` + `len`): each line counts its characters (not
+    // UTF-8 bytes) plus its own line ending only when it has one, so a final line without "\n" adds nothing.
+    for line in text.split_inclusive('\n') {
         let stripped = line.trim();
+        let n = line.chars().count();
         if stripped.starts_with("```") || stripped.starts_with("~~~") {
             in_fence = !in_fence;
-            code_chars += line.len() + 1;
+            code_chars += n;
             continue;
         }
         if in_fence
@@ -72,9 +75,9 @@ pub fn est_tokens(text: &str) -> usize {
             || (!stripped.is_empty()
                 && (stripped.ends_with('{') || stripped.ends_with('}') || stripped.ends_with(';')))
         {
-            code_chars += line.len() + 1;
+            code_chars += n;
         } else {
-            prose_chars += line.len() + 1;
+            prose_chars += n;
         }
     }
 
@@ -446,6 +449,31 @@ mod tests {
         let code = "```rust\nfn main() {\n    println!(\"hello\");\n}\n```";
         let c_toks = est_tokens(code);
         assert!(c_toks > 0);
+    }
+
+    /// Values from hive.est_tokens in Python for the same strings (cross-language parity, incl. no trailing
+    /// newline, CRLF and non-ASCII).
+    #[test]
+    fn test_token_estimator_matches_python() {
+        let cases: [(&str, usize); 14] = [
+            ("", 0),
+            ("a", 1),
+            ("abc\n", 2),
+            ("xxxxxxxxxx", 3),
+            ("xxxxxxxxxx\n", 3),
+            ("fn main() {", 4),
+            ("let x = 1;", 4),
+            ("```\ncode\n```", 4),
+            ("    indented code\nprose line", 9),
+            ("héllo wörld ✓ naïve café", 7),
+            ("a\r\nb", 2),
+            ("line one\nline two\nline three", 8),
+            ("2026-11-26T10:00:00 INFO worker 0 processed batch 0 ok", 14),
+            ("{\n  \"k\": 1\n}\n", 4),
+        ];
+        for (text, want) in cases {
+            assert_eq!(est_tokens(text), want, "{text:?}");
+        }
     }
 
     #[test]
