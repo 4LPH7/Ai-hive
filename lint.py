@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # `python -I` drops th
 import hive  # noqa: E402
 
 ALLOWED = {
-    "type": {"project-memory", "adr", "journal", "note"},
+    "type": {"project-memory", "adr", "journal", "note", "codex"},
     "status": {"active", "superseded", "archived"},
     "agent": {"claude", "codex", "antigravity", "user"},
 }
@@ -107,6 +107,15 @@ def check_frontmatter(rel, meta, has_frontmatter):
             and updated >= SOURCE_RULE_FROM and not meta.get("source")):
         out.append(Finding("ERROR", "source-missing", rel, "agent-written note needs `source:` (commit, session, URL or file)"))
     return out
+
+
+def check_codex(rel, meta, text):
+    """CODEX-04: a codex whose body no longer matches content_sha256 was edited; codices are immutable."""
+    if meta.get("type") != "codex":
+        return []
+    import codex
+    problem = codex.verify(text)
+    return [Finding("ERROR", "codex-tampered", rel, problem)] if problem else []
 
 
 def check_secrets(rel, text):
@@ -228,6 +237,7 @@ def lint(vault=hive.VAULT, today=None, files=None):
         meta, _, body = hive.parse_note(text)
         findings += check_frontmatter(rel_posix, meta, text.startswith("---"))
         findings += check_secrets(rel_posix, text)
+        findings += check_codex(rel_posix, meta, text)
         findings += check_size_and_age(rel_posix, meta, text, today)
         findings += check_journal(rel_posix, body)
         outbound[rel_posix] = set()

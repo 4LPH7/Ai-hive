@@ -56,7 +56,23 @@ Use forward slashes inside JSON strings. The command prints a report (`added`, `
 `tagged`, `rejected` with reasons, `pruned`). If something was rejected, fix it only if the reason shows a real
 problem; do not retry to force content in.
 
-## 4. Finish
+## 4. Checkpoint record
 
-One line to the user: what you added or tagged (ids). Then continue or end exactly as you were going to.
+After the apply, write a compact session record (CODEX-01; `hive codex write` will persist it once CODEX-02
+lands). Write it as one JSON object to a temp file next to the delta and name its path in your one-line report.
+Every field is required; use `[]` or `""` when empty. Write facts only, no secrets.
+
+```json
+{"goal": "what the session set out to do, one sentence",
+ "outcome": "done | partial | blocked: plus one sentence of evidence (commit SHA, test result)",
+ "files": ["repo-relative paths changed"],
+ "dead_ends": ["approach tried + why it failed, one line each (future DEAD_END traces)"],
+ "invariants": ["rules that must keep holding, e.g. eval Recall@5 >= 0.97"],
+ "open_threads": ["unfinished work or questions for the next session"]}
+```
+
+## 5. Finish
+
+One line to the user: what you added or tagged (ids) and the checkpoint record path. Then continue or end
+exactly as you were going to.
 If a Hive ACE checkpoint triggered this, return to the previous task's final answer; do not start new work.

@@ -168,7 +168,7 @@ INSTRUCTIONS = ("Shared memory for all coding agents (Obsidian vault + graphify 
 
 READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 LIST_CACHE = {"ttlMs": 3600000, "cacheScope": "public"}  # required on modern tools/list + server/discover
-DEFAULT_SECTION_WEIGHTS = {"memory": 0.35, "playbook": 0.15, "task_notes": 0.25, "code_graph": 0.25}
+DEFAULT_SECTION_WEIGHTS = {"memory": 0.35, "playbook": 0.15, "task_notes": 0.20, "traces": 0.10, "code_graph": 0.25}
 FORWARD_WEIGHT = float(os.environ.get("HIVE_PPR_FWD", 0.7))
 REVERSE_WEIGHT = float(os.environ.get("HIVE_PPR_REV", 0.3))
 
@@ -797,6 +797,23 @@ def pack(sections, budget=1500, weights=None):
     return result
 
 
+def traces_section(db, project, task):
+    """TRACE-04: live traces for hive_context; a broken trace table never blocks context."""
+    try:
+        import traces
+        live = traces.context_section(traces.active(db, project, int(time.time())), task)
+    except (sqlite3.Error, ValueError) as exc:
+        print(f"hive: traces skipped: {exc}", file=sys.stderr)
+        live = ""
+    try:  # CODEX-03: codex dead ends / open threads share the traces slice
+        import codex
+        notes = codex.context_section(VAULT, project, task)
+    except OSError as exc:
+        print(f"hive: codex notes skipped: {exc}", file=sys.stderr)
+        notes = ""
+    return "\n\n".join(s for s in (live, notes) if s)
+
+
 def tool_context(project, task="", budget=1500):
     t0 = time.time()
     project = validate_slug(project)
@@ -864,6 +881,7 @@ def tool_context(project, task="", budget=1500):
         "memory": memory_section,
         "playbook": playbook_section,
         "task_notes": task_notes_section,
+        "traces": traces_section(idx.db, project, task),
         "code_graph": code_graph_section,
     }
     try:
@@ -1147,6 +1165,63 @@ def tool_eval(golden=str(Path(__file__).with_name("eval_golden.json")), k=5):
     return "\n".join([f"Recall@{k} {found}/{n} = {found / n:.2f}   MRR {rr / n:.3f}"] + misses)
 
 
+def tool_codex(*args):
+    """CODEX-02 CLI fallback: `codex write <project> <record.json>` -> immutable codices/<project>/ note."""
+    import datetime
+    import sqlite3
+    import ledger
+    import codex
+    if len(args) != 3 or args[0] != "write":
+        raise SystemExit("usage: hive codex write <project> <record.json>")
+    try:
+        rec = json.loads(Path(args[2]).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"codex: cannot read record: {exc}")
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    try:
+        with db:
+            path = codex.write(VAULT, db, args[1], rec, ledger.resolve_agent(), ledger.resolve_session(),
+                               datetime.date.today().isoformat(), int(time.time()))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    finally:
+        db.close()
+    return f"codex: wrote {path} ({len(rec['dead_ends'])} dead-end traces)"
+
+
+def tool_trace(*args):
+    """TRACE-03 CLI fallback: `trace add <project> <kind> <target> <summary>` | `trace list <project>`.
+    Writes only the disposable hive.sqlite, never the vault."""
+    import sqlite3
+    import time
+    import ledger
+    import traces
+    if len(args) >= 5 and args[0] == "add":
+        project, kind, target, summary = args[1], args[2].upper(), args[3], " ".join(args[4:])
+    elif len(args) == 2 and args[0] == "list":
+        project = args[1]
+    else:
+        raise SystemExit("usage: hive trace add <project> <kind> <target> <summary> | hive trace list <project>")
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    try:
+        now = int(time.time())
+        if args[0] == "add":
+            try:
+                tid = traces.add(db, project, kind, target, summary, ledger.resolve_agent(), ledger.resolve_session(), now)
+            except ValueError as exc:
+                raise SystemExit(f"trace: {exc}")
+            return f"trace: {kind} #{tid} on {target} ({project})"
+        rows = traces.active(db, project, now)
+        if not rows:
+            return f"trace: no active traces for {project}"
+        return "\n".join(f"{t['kind']:<10} {w:.2f}  {t['target']}  {t['summary']} "
+                         f"({t['agent']}, {max(0, now - t['created_at']) // 3600}h ago)" for t, w in rows)
+    finally:
+        db.close()
+
+
 def tool_ledger(*args, tail=None, project=None):
     import ledger
     cfg = load_config()
@@ -1331,7 +1406,7 @@ def main(argv=None):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine, "curate": tool_curate,
+        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex,
     }
     if cmd not in commands:
         print(__doc__)

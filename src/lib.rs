@@ -1,5 +1,6 @@
 pub mod ace;
 pub mod bench;
+pub mod codex;
 pub mod common;
 pub mod curate;
 pub mod eval;
@@ -12,3 +13,4 @@ pub mod mcp;
 pub mod miner;
 pub mod packer;
 pub mod skill;
+pub mod trace;

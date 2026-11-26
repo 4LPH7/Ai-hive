@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub const ALLOWED_TYPE: &[&str] = &["project-memory", "adr", "journal", "note"];
+pub const ALLOWED_TYPE: &[&str] = &["project-memory", "adr", "journal", "note", "codex"];
 pub const ALLOWED_STATUS: &[&str] = &["active", "superseded", "archived"];
 pub const ALLOWED_AGENT: &[&str] = &["claude", "codex", "antigravity", "user"];
 pub const REQUIRED_FIELDS: &[&str] = &["type", "project", "agent", "status", "updated"];
@@ -296,6 +296,18 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
                     code: "secret-detected".to_string(),
                     path: rel.clone(),
                     message: format!("line {}: suspected secret or credential", idx + 1),
+                });
+            }
+        }
+
+        // CODEX-04: codices are immutable; a body hash mismatch means someone edited one
+        if meta.get("type").map(|t| t.as_str()) == Some("codex") {
+            if let Some(problem) = crate::codex::verify(&content) {
+                findings.push(Finding {
+                    severity: "ERROR".to_string(),
+                    code: "codex-tampered".to_string(),
+                    path: rel.clone(),
+                    message: problem,
                 });
             }
         }

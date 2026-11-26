@@ -541,6 +541,25 @@ pub fn tool_context(
         }
     }
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let traces_section = match crate::trace::active(&idx.conn, &slug, now) {
+        Ok(items) => crate::trace::context_section(&items, task),
+        Err(e) => {
+            eprintln!("hive: traces skipped: {e}");
+            String::new()
+        }
+    };
+    // CODEX-03: codex dead ends / open threads share the traces slice
+    let codex_notes = crate::codex::context_section(&idx.vault, &slug, task);
+    let traces_section = [traces_section, codex_notes]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
     let sections = [
         Section {
             name: "memory",
@@ -556,6 +575,11 @@ pub fn tool_context(
             name: "task_notes",
             text: &task_notes_section,
             weight: default_section_weight("task_notes"),
+        },
+        Section {
+            name: "traces",
+            text: &traces_section,
+            weight: default_section_weight("traces"),
         },
         Section {
             name: "code_graph",

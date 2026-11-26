@@ -11,7 +11,8 @@ pub fn default_section_weight(name: &str) -> f64 {
     match name {
         "memory" => 0.35,
         "playbook" => 0.15,
-        "task_notes" => 0.25,
+        "task_notes" => 0.20,
+        "traces" => 0.10,
         "code_graph" => 0.25,
         _ => 1.0,
     }
