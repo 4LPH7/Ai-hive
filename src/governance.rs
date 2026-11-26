@@ -293,6 +293,247 @@ pub fn release(vault: &Path, rule_id: &str) -> Result<usize, String> {
     Ok(rules.len() - keep.len())
 }
 
+// ---------------------------------------------------------------- GOV-03 audit (mirror of governance.py)
+pub const AUDIT_LEDGER_LINES: usize = 10;
+
+fn quarantine_line(rules: &[Rule], session: &str, agent: &str, ts: i64) -> String {
+    let ids: Vec<&str> = rules
+        .iter()
+        .filter(|r| rule_matches(r, session, agent, ts))
+        .map(|r| r.id.as_str())
+        .collect();
+    if ids.is_empty() {
+        "  quarantined: no".into()
+    } else {
+        format!("  quarantined: yes ({})", ids.join(", "))
+    }
+}
+
+fn or_q(s: &str) -> &str {
+    if s.is_empty() {
+        "?"
+    } else {
+        s
+    }
+}
+
+fn audit_bullet(
+    vault: &Path,
+    ledger_path: &Path,
+    id: &str,
+    rules: &[Rule],
+) -> Result<Vec<String>, String> {
+    let mut playbooks = vec![(
+        "global".to_string(),
+        vault.join("_meta").join("playbook.md"),
+    )];
+    if let Ok(rd) = std::fs::read_dir(vault.join("projects")) {
+        let mut more: Vec<(String, PathBuf)> = rd
+            .flatten()
+            .map(|e| {
+                (
+                    e.file_name().to_string_lossy().to_string(),
+                    e.path().join("playbook.md"),
+                )
+            })
+            .collect();
+        more.sort();
+        playbooks.extend(more);
+    }
+    for (scope, pb) in playbooks {
+        let Ok(text) = std::fs::read_to_string(&pb) else {
+            continue;
+        };
+        let sections = crate::ace::parse(&text);
+        let Some((name, b)) = sections.iter().find_map(|(n, bs)| {
+            bs.iter()
+                .find(|b| b.id == id)
+                .map(|b| (n.clone(), b.clone()))
+        }) else {
+            continue;
+        };
+        let meta = crate::quorum::load(&crate::quorum::meta_path(&pb));
+        let rec = meta.get(id).cloned().unwrap_or(crate::quorum::Meta {
+            id: id.into(),
+            state: crate::quorum::DEFAULT_STATE.into(),
+            origin_session: String::new(),
+            origin_agent: String::new(),
+            origin_ts: 0,
+            evidence: Vec::new(),
+        });
+        let mut out = vec![
+            format!(
+                "bullet {id} ({scope}/{name}) seen={} helpful={} harmful={}",
+                b.seen, b.helpful, b.harmful
+            ),
+            format!("  text: {}", b.content),
+            format!(
+                "  state: {} score={} sessions={}",
+                rec.state,
+                crate::quorum::score(&rec),
+                crate::quorum::sessions(&rec).len()
+            ),
+            format!(
+                "  origin: session={} agent={} ts={}",
+                or_q(&rec.origin_session),
+                or_q(&rec.origin_agent),
+                rec.origin_ts
+            ),
+        ];
+        out.extend(rec.evidence.iter().map(|e| {
+            format!(
+                "  evidence: {} session={} agent={}",
+                e.kind, e.session, e.agent
+            )
+        }));
+        let all: Vec<(String, String)> = sections
+            .values()
+            .flatten()
+            .map(|b| (b.id.clone(), b.content.clone()))
+            .collect();
+        for (a, b2, s) in crate::quorum::conflicts(&all) {
+            if a == id || b2 == id {
+                out.push(format!(
+                    "  conflict: vs {} ({})",
+                    if a == id { &b2 } else { &a },
+                    s.join(", ")
+                ));
+            }
+        }
+        let events: Vec<_> = crate::ledger::read_ledger(ledger_path, None, None)
+            .into_iter()
+            .filter(|e| e.injected_bullets.iter().any(|x| x == id))
+            .collect();
+        for e in events
+            .iter()
+            .skip(events.len().saturating_sub(AUDIT_LEDGER_LINES))
+        {
+            let mut line = format!(
+                "  ledger: {} {} session={} agent={}",
+                e.ts, e.event, e.session_id, e.agent
+            );
+            if !e.repo_sha.is_empty() {
+                line.push_str(&format!(" repo_sha={}", e.repo_sha));
+            }
+            if !e.content_sha256.is_empty() {
+                line.push_str(&format!(
+                    " content_sha256={}",
+                    &e.content_sha256[..12.min(e.content_sha256.len())]
+                ));
+            }
+            out.push(line);
+        }
+        out.push(if matches!(rec.state.as_str(), "scout" | "quorum") {
+            quarantine_line(rules, &rec.origin_session, &rec.origin_agent, rec.origin_ts)
+        } else {
+            "  quarantined: no (only scout/quorum bullets can be)".into()
+        });
+        return Ok(out);
+    }
+    Err(format!("audit: no bullet {id} in any playbook"))
+}
+
+fn audit_trace(
+    conn: &Connection,
+    raw: &str,
+    rules: &[Rule],
+    now: i64,
+) -> Result<Vec<String>, String> {
+    let tid: i64 = raw
+        .parse()
+        .map_err(|_| format!("audit: bad trace id {raw:?}"))?;
+    crate::trace::ensure_table(conn)?;
+    let row = conn
+        .query_row(
+            "SELECT project, kind, target, summary, agent, session_id, w0, created_at, half_life_h FROM traces WHERE id=?1",
+            [tid],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, f64>(6)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, f64>(8)?,
+                ))
+            },
+        )
+        .map_err(|_| format!("audit: no trace {tid} (expired traces are purged after 7 days)"))?;
+    let (project, kind, target, summary, agent, session, w0, created, hl) = row;
+    let w = crate::trace::strength(w0, created, now, hl);
+    Ok(vec![
+        format!("trace {tid} {kind} {target} ({project})"),
+        format!("  summary: {summary}"),
+        format!("  origin: session={session} agent={agent} created_at={created}"),
+        format!(
+            "  strength: {w:.2} (w0={w0}, half-life {hl} h, hidden below {})",
+            crate::trace::MIN_STRENGTH
+        ),
+        quarantine_line(rules, &session, &agent, created),
+    ])
+}
+
+fn audit_codex(vault: &Path, stem: &str, rules: &[Rule]) -> Result<Vec<String>, String> {
+    let note = std::fs::read_dir(vault.join("codices"))
+        .ok()
+        .into_iter()
+        .flat_map(|rd| rd.flatten())
+        .map(|p| p.path().join(format!("{stem}.md")))
+        .find(|p| p.is_file())
+        .ok_or_else(|| {
+            format!("audit: nothing matches {stem:?} (bullet id, trace:<n> or codex file stem)")
+        })?;
+    let text = std::fs::read_to_string(&note).map_err(|e| e.to_string())?;
+    let (meta, title, _) = crate::index::parse_note(&text);
+    let (session, agent, ts) = note_origin(&text);
+    let rel = note
+        .strip_prefix(vault)
+        .unwrap_or(&note)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let integrity = crate::codex::verify(&text).unwrap_or_else(|| "ok".into());
+    Ok(vec![
+        format!(
+            "codex {rel} ({})",
+            meta.get("project").cloned().unwrap_or_default()
+        ),
+        format!("  goal: {title}"),
+        format!(
+            "  origin: session={} agent={} updated={}",
+            or_q(&session),
+            or_q(&agent),
+            meta.get("updated").cloned().unwrap_or_default()
+        ),
+        format!("  integrity: {integrity}"),
+        quarantine_line(rules, &session, &agent, ts),
+    ])
+}
+
+/// GOV-03: provenance chain of a bullet id, `trace:<n>` or a codex file stem, as printable lines.
+pub fn audit(
+    vault: &Path,
+    conn: &Connection,
+    ledger_path: &Path,
+    target: &str,
+    now: i64,
+) -> Result<Vec<String>, String> {
+    let target = target.trim();
+    let rules = load_rules(vault);
+    if regex::Regex::new(r"^[a-z]{3}-\d{5}$")
+        .unwrap()
+        .is_match(target)
+    {
+        return audit_bullet(vault, ledger_path, target, &rules);
+    }
+    if let Some(raw) = target.strip_prefix("trace:") {
+        return audit_trace(conn, raw, &rules, now);
+    }
+    audit_codex(vault, target, &rules)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +609,36 @@ mod tests {
             "codex",
             "2027-01-15"
         ));
+        // GOV-03 audit
+        let tid: i64 = conn
+            .query_row("SELECT id FROM traces WHERE session_id='bad-s'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let out = audit(
+            &vault,
+            &conn,
+            &vault.join("l.jsonl"),
+            &format!("trace:{tid}"),
+            1_800_000_000,
+        )
+        .unwrap()
+        .join("\n");
+        assert!(
+            out.contains(&format!("trace {tid} HOT_FILE src/b.rs (demo)")),
+            "{out}"
+        );
+        assert!(
+            out.contains("origin: session=bad-s agent=codex")
+                && out.contains("quarantined: yes (q-"),
+            "{out}"
+        );
+        for bad in ["pit-99999", "trace:999", "trace:x", "no-such-thing"] {
+            assert!(
+                audit(&vault, &conn, &vault.join("l.jsonl"), bad, 0).is_err(),
+                "{bad}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&vault);
     }
 }

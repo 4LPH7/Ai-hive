@@ -179,3 +179,100 @@ def release(vault, rule_id):
     keep = [r for r in rules if r["id"] != rule_id]
     _save(vault, keep)
     return len(rules) - len(keep)
+
+
+# ---------------------------------------------------------------- GOV-03 audit
+BULLET_ID_RE = re.compile(r"^[a-z]{3}-\d{5}$")
+AUDIT_LEDGER_LINES = 10
+
+
+def _quarantine_line(rules, session, agent, ts):
+    ids = [r["id"] for r in rules if rule_matches(r, session, agent, ts)]
+    return f"  quarantined: yes ({', '.join(ids)})" if ids else "  quarantined: no"
+
+
+def _playbooks(vault):
+    vault = Path(vault)
+    yield "global", vault / "_meta" / "playbook.md"
+    for pb in sorted((vault / "projects").glob("*/playbook.md")):
+        yield pb.parent.name, pb
+
+
+def _audit_bullet(vault, ledger_path, bullet_id, rules):
+    import ace
+    import ledger
+    for scope, pb in _playbooks(vault):
+        if not pb.is_file():
+            continue
+        sections = ace.parse(pb.read_text(encoding="utf-8"))
+        hit = next(((name, b) for name, bullets in sections.items() for b in bullets if b["id"] == bullet_id), None)
+        if not hit:
+            continue
+        name, b = hit
+        meta = quorum.load(quorum.meta_path(pb))
+        rec = quorum._clean(quorum._entry(meta, bullet_id))
+        out = [f"bullet {bullet_id} ({scope}/{name}) seen={b.get('seen', 0)} helpful={b['helpful']} "
+               f"harmful={b['harmful']}",
+               f"  text: {b['content']}",
+               f"  state: {rec['state']} score={quorum.score(rec):g} sessions={len(quorum.sessions(rec))}",
+               f"  origin: session={rec['origin_session'] or '?'} agent={rec['origin_agent'] or '?'} "
+               f"ts={rec['origin_ts']}"]
+        out += [f"  evidence: {e['kind']} session={e['session']} agent={e['agent']}" for e in rec["evidence"]]
+        bullets = [x for v in sections.values() for x in v]
+        out += [f"  conflict: vs {b_ if a == bullet_id else a} ({', '.join(s)})"
+                for a, b_, s in quorum.conflicts(bullets) if bullet_id in (a, b_)]
+        events = [e for e in ledger.read_ledger(ledger_path) if bullet_id in (e.get("injected_bullets") or [])]
+        out += [f"  ledger: {e.get('ts', '')} {e.get('event', '')} session={e.get('session_id', '')} "
+                f"agent={e.get('agent', '')}"
+                + (f" repo_sha={e['repo_sha']}" if e.get("repo_sha") else "")
+                + (f" content_sha256={e['content_sha256'][:12]}" if e.get("content_sha256") else "")
+                for e in events[-AUDIT_LEDGER_LINES:]]
+        out.append(_quarantine_line(rules, rec["origin_session"], rec["origin_agent"], rec["origin_ts"])
+                   if rec["state"] in ("scout", "quorum") else "  quarantined: no (only scout/quorum bullets can be)")
+        return out
+    raise ValueError(f"audit: no bullet {bullet_id} in any playbook")
+
+
+def _audit_trace(db, raw_id, rules, now):
+    import traces
+    try:
+        tid = int(raw_id)
+    except ValueError:
+        raise ValueError(f"audit: bad trace id {raw_id!r}") from None
+    traces.ensure_table(db)
+    row = db.execute("SELECT id, project, kind, target, summary, agent, session_id, w0, created_at, half_life_h "
+                     "FROM traces WHERE id=?", (tid,)).fetchone()
+    if not row:
+        raise ValueError(f"audit: no trace {tid} (expired traces are purged after 7 days)")
+    _, project, kind, target, summary, agent, session, w0, created, hl = row
+    w = traces.strength(w0, created, now, hl)
+    return [f"trace {tid} {kind} {target} ({project})", f"  summary: {summary}",
+            f"  origin: session={session} agent={agent} created_at={created}",
+            f"  strength: {w:.2f} (w0={w0:g}, half-life {hl:g} h, hidden below {traces.MIN_STRENGTH:g})",
+            _quarantine_line(rules, session, agent, created)]
+
+
+def _audit_codex(vault, stem, rules):
+    import codex
+    notes = sorted(Path(vault).glob(f"codices/*/{stem}.md"))
+    if not notes:
+        raise ValueError(f"audit: nothing matches {stem!r} (bullet id, trace:<n> or codex file stem)")
+    note = notes[0]
+    text = note.read_text(encoding="utf-8", errors="replace")
+    meta, title, _ = hive.parse_note(text)
+    session, agent, ts = note_origin(text)
+    problem = codex.verify(text)
+    return [f"codex {note.relative_to(Path(vault)).as_posix()} ({meta.get('project', '')})", f"  goal: {title}",
+            f"  origin: session={session or '?'} agent={agent or '?'} updated={meta.get('updated', '')}",
+            f"  integrity: {'ok' if not problem else problem}", _quarantine_line(rules, session, agent, ts)]
+
+
+def audit(vault, db, ledger_path, target, now):
+    """GOV-03: provenance chain of a bullet id, `trace:<n>` or a codex file stem, as printable lines."""
+    target = str(target).strip()
+    rules = load_rules(vault)
+    if BULLET_ID_RE.match(target):
+        return _audit_bullet(vault, ledger_path, target, rules)
+    if target.startswith("trace:"):
+        return _audit_trace(db, target[len("trace:"):], rules, now)
+    return _audit_codex(vault, target, rules)

@@ -119,6 +119,41 @@ class GovernanceReadPathTest(GovernanceTest):
         warns = [f for f in lint.lint(self.vault) if f.code == "quarantined-link"]
         self.assertEqual([(w.severity, w.path) for w in warns], [("WARN", "projects/demo/notes/ref.md")])
 
+class GovernanceAuditTest(GovernanceTest):
+    """GOV-03: `hive audit <id>` prints the full provenance chain of a bullet, trace or codex."""
+
+    def audit(self, target):
+        return "\n".join(governance.audit(self.vault, self.db, self.vault / "l.jsonl", target, T0))
+
+    def test_bullet_chain_has_location_state_origin_ledger_and_quarantine(self):
+        governance.quarantine(self.vault, self.db, session="bad-s", now=T0)
+        out = self.audit(self.bad_bullet)
+        self.assertIn(f"bullet {self.bad_bullet} (demo/pitfalls)", out)
+        self.assertIn("poisoned rule from a bad session", out)
+        self.assertIn("state: scout", out)
+        self.assertIn("origin: session=bad-s agent=codex", out)
+        self.assertIn("ledger: ", out)
+        self.assertIn("ace_apply", out)
+        self.assertIn("quarantined: yes (q-", out)
+
+    def test_trace_and_codex_chains(self):
+        (bad,) = [t for t, _ in traces.active(self.db, "demo", T0) if t["session_id"] == "bad-s"]
+        out = self.audit(f"trace:{bad['id']}")
+        self.assertIn(f"trace {bad['id']} HOT_FILE src/b.rs (demo)", out)
+        self.assertIn("origin: session=bad-s agent=codex", out)
+        self.assertIn("strength: ", out)
+        self.assertIn("quarantined: no", out)
+        stem = sorted((self.vault / "codices" / "demo").glob("2027-01-15-*.md"))[0].stem
+        out = self.audit(stem)
+        self.assertIn(f"codex codices/demo/{stem}.md", out)
+        self.assertIn("origin: session=bad-s agent=codex", out)
+        self.assertIn("integrity: ok", out)
+
+    def test_unknown_ids_raise(self):
+        for target in ("pit-99999", "trace:999", "no-such-thing", "trace:x"):
+            with self.assertRaises(ValueError):
+                governance.audit(self.vault, self.db, self.vault / "l.jsonl", target, T0)
+
 
 if __name__ == "__main__":
     unittest.main()

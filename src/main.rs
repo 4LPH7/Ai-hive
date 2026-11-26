@@ -128,6 +128,8 @@ enum Commands {
         #[command(subcommand)]
         cmd: TraceCommands,
     },
+    /// GOV-03: provenance chain of a bullet id, trace:<n> or codex file stem
+    Audit { target: String },
     /// GOV-01: reversible quarantine of everything from a session or agent (rules only; items never edited)
     Quarantine {
         #[arg(long, default_value = "")]
@@ -527,6 +529,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+            }
+            Commands::Audit { target } => {
+                if let Some(parent) = cfg.db.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let conn = rusqlite::Connection::open(&cfg.db)?;
+                let lines = ai_hive::governance::audit(
+                    &cfg.vault,
+                    &conn,
+                    &cfg.ledger,
+                    &target,
+                    chrono::Utc::now().timestamp(),
+                )?;
+                println!("{}", lines.join("\n"));
             }
             Commands::Quarantine {
                 session,

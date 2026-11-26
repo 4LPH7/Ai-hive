@@ -1172,6 +1172,22 @@ def tool_eval(golden=str(Path(__file__).with_name("eval_golden.json")), k=5):
     return "\n".join([f"Recall@{k} {found}/{n} = {found / n:.2f}   MRR {rr / n:.3f}"] + misses)
 
 
+def tool_audit(*args):
+    """GOV-03 CLI fallback: audit <bullet-id | trace:<n> | codex-stem>."""
+    import sqlite3
+    import governance
+    if len(args) != 1:
+        raise SystemExit("usage: hive audit <bullet-id | trace:<n> | codex-stem>")
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    try:
+        return "\n".join(governance.audit(VAULT, db, CFG["ledger"], args[0], int(time.time())))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    finally:
+        db.close()
+
+
 def tool_quarantine(*args):
     """GOV-01 CLI fallback: quarantine --session X | --agent Y [--since T] [--reason R] | --release ID | --list."""
     import argparse
@@ -1457,7 +1473,7 @@ def main(argv=None):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex, "quarantine": tool_quarantine,
+        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex, "quarantine": tool_quarantine, "audit": tool_audit,
     }
     if cmd not in commands:
         print(__doc__)
