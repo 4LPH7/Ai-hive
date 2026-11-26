@@ -1343,6 +1343,36 @@ def tool_codex(*args):
     return f"codex: wrote {path} ({len(rec['dead_ends'])} dead-end traces)"
 
 
+def tool_ratchet(*args):
+    """RATCHET-02 CLI fallback: `ratchet [scope]` drafts proposals; `ratchet accept <rule-id> [--target t]
+    [--glob g]` ships one (human step); `ratchet list` shows shipped rules."""
+    import argparse
+    import ledger
+    import ratchet
+    if args and args[0] == "accept":
+        p = argparse.ArgumentParser(prog="hive ratchet accept")
+        p.add_argument("rule_id")
+        p.add_argument("--target", choices=ratchet.TARGETS)
+        p.add_argument("--glob")
+        a = p.parse_args(args[1:])
+        try:
+            r = ratchet.accept(VAULT, a.rule_id, a.target, a.glob)
+        except ValueError as exc:
+            raise SystemExit(str(exc))
+        return (f"ratchet: shipped {r['id']}: {r['target']} files matching {r['glob']} must not contain "
+                f"`{r['pattern']}`; bullet {r['bullet']} is no longer injected")
+    if args and args[0] == "list":
+        rules = ratchet.load_rules(VAULT)
+        return "\n".join(f"{r['id']}  {r['target']}  {r['glob']}  `{r['pattern']}`" for r in rules) or \
+            "ratchet: no shipped rules"
+    scopes = [validate_slug(args[0])] if args else ["global"] + sorted(
+        p.parent.name for p in (Path(VAULT) / "projects").glob("*/playbook.md"))
+    written = ratchet.propose(VAULT, scopes, ledger.resolve_agent(), ledger.resolve_session())
+    if not written:
+        return "ratchet: no new candidates (canonical lessons that ban a `backticked` token)"
+    return "\n".join(f"ratchet: proposal written to {p}" for p in written)
+
+
 def tool_handoff(*args):
     """HAND-01 CLI fallback: `handoff write <project> <record.json>` -> immutable handoff envelope."""
     import codex
@@ -1489,6 +1519,12 @@ def cmd_pre_commit(*args):
     print(rep)
     if "ERROR" in rep:
         sys.exit(1)
+    import ratchet
+    bad = ratchet.staged_violations(VAULT)  # RATCHET-02: shipped repo rules block staged files
+    for path, line, r in bad:
+        print(f"ERROR ratchet-violation {path}:{line}: `{r['pattern']}` is banned by {r['id']}")
+    if bad:
+        sys.exit(1)
     print("=== [2/2] Running Python tests ===")
     import subprocess
     res = subprocess.call([sys.executable, "-m", "unittest", "discover"])
@@ -1614,7 +1650,7 @@ def main(argv=None):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex, "handoff": tool_handoff, "quarantine": tool_quarantine, "audit": tool_audit,
+        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex, "handoff": tool_handoff, "ratchet": tool_ratchet, "quarantine": tool_quarantine, "audit": tool_audit,
     }
     if cmd not in commands:
         print(__doc__)

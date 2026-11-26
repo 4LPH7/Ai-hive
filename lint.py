@@ -227,6 +227,8 @@ def lint(vault=hive.VAULT, today=None, files=None):
     findings, inbound, outbound = [], defaultdict(set), {}
     import governance
     hidden = governance.quarantined_paths(vault)  # GOV-02: warn on links into a quarantine radius
+    import ratchet
+    ratchet_rules = [r for r in ratchet.load_rules(vault) if r["target"] == "vault"]  # RATCHET-02
     for rel in notes:
         file_path = vault / rel if not Path(rel).is_absolute() else Path(rel)
         try:
@@ -242,6 +244,9 @@ def lint(vault=hive.VAULT, today=None, files=None):
         findings += check_codex(rel_posix, meta, text)
         findings += check_size_and_age(rel_posix, meta, text, today)
         findings += check_journal(rel_posix, body)
+        findings += [Finding("ERROR", "ratchet-violation", rel_posix,
+                             f"line {line}: `{r['pattern']}` is banned by {r['id']} ({r['message'][:80]})")
+                     for r, line in ratchet.check_text(ratchet_rules, "vault", rel_posix, text)]
         outbound[rel_posix] = set()
         for target in links_in(body):
             hits = resolver.resolve(target)

@@ -747,10 +747,13 @@ pub fn load_injectable(vault: &Path, scope: &str) -> Result<HashMap<String, Vec<
     let mut sections = load(vault, scope)?;
     let meta = crate::quorum::load(&crate::quorum::meta_path(&scope_path(vault, scope)?));
     let rules = crate::governance::load_rules(vault); // GOV-02: quarantined bullets never injected
+    let shipped = crate::ratchet::load_rules(vault); // RATCHET-02: a shipped lint rule replaced the bullet
+    let slug = crate::common::slugify(scope);
     for bullets in sections.values_mut() {
         bullets.retain(|b| {
             crate::quorum::injectable(crate::quorum::state_of(&meta, &b.id))
                 && !crate::governance::bullet_hidden(&rules, meta.get(&b.id))
+                && !crate::ratchet::retired(&shipped, &slug, &b.id)
         });
     }
     Ok(sections)

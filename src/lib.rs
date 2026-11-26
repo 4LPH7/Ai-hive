@@ -15,5 +15,6 @@ pub mod mcp;
 pub mod miner;
 pub mod packer;
 pub mod quorum;
+pub mod ratchet;
 pub mod skill;
 pub mod trace;

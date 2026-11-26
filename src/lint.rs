@@ -263,6 +263,10 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
     let mut active_project_notes: HashMap<String, String> = HashMap::new();
     let mut adr_statuses: HashMap<String, (String, String, Vec<String>)> = HashMap::new();
     let mut stem_counts: HashMap<String, Vec<String>> = HashMap::new();
+    let ratchet_rules: Vec<crate::ratchet::Rule> = crate::ratchet::load_rules(vault)
+        .into_iter()
+        .filter(|r| r.target == "vault")
+        .collect();
 
     for rel in &all_files {
         if !rel.ends_with(".md") {
@@ -288,6 +292,21 @@ pub fn lint(vault: &Path, files_filter: Option<&HashSet<String>>) -> Vec<Finding
                 .entry(stem.to_lowercase())
                 .or_default()
                 .push(rel.clone());
+        }
+
+        // RATCHET-02: shipped vault rules
+        for (r, line) in crate::ratchet::check_text(&ratchet_rules, "vault", rel, &content) {
+            findings.push(Finding {
+                severity: "ERROR".to_string(),
+                code: "ratchet-violation".to_string(),
+                path: rel.clone(),
+                message: format!(
+                    "line {line}: `{}` is banned by {} ({})",
+                    r.pattern,
+                    r.id,
+                    r.message.chars().take(80).collect::<String>()
+                ),
+            });
         }
 
         // Secret scan

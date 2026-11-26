@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ace apply` reports `unsourced` ids; the `hive-ace` skill documents the field.
 - **MCP-02 schema budget**: Python and Rust tests cap the six MCP tool schemas at 1,140 est tokens (1,037
   measured at v2.7.2 + 10%), so tool descriptions cannot creep into context confusion. MCP-01 (≤ 6 tools) holds.
+- **RATCHET-02 `hive ratchet` (`ratchet.py`, `src/ratchet.rs`)**: drafts `inbox/ratchet-<rule-id>.md` for each
+  canonical lesson that bans a `backticked` token; `hive ratchet accept <rule-id> [--target vault|repo]
+  [--glob G]` (a human step) ships it to `_meta/ratchet_rules.jsonl`. Vault rules are `ratchet-violation`
+  ERRORs in `hive lint`; repo rules block staged files in `hive pre-commit`; the source bullet stops being
+  injected (`ace.select`, `load_injectable`). Patterns are literal substrings; globs support `*` and `?` only,
+  with identical semantics in both languages. Phase 8 gate covered by Python and Rust end-to-end tests.
 
 ## [2.7.1] - 2026-11-26
 

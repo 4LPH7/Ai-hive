@@ -401,11 +401,15 @@ def select(scopes, task="", limit=INJECT_LIMIT):
     want = tokens(task)
     pool = []
     rules = governance.load_rules(VAULT)
+    import ratchet
+    shipped = ratchet.load_rules(VAULT)
     for scope in scopes:
         meta = quorum.load(quorum.meta_path(scope_path(scope)))  # QUOR-03: only injectable states
         for name, bullets in load(scope).items():
             for b in bullets:
                 if not quorum.injectable(quorum.state_of(meta, b["id"])):
+                    continue
+                if ratchet.retired(shipped, slugify(scope), b["id"]):  # RATCHET-02: a lint rule replaced it
                     continue
                 if governance.bullet_hidden(rules, meta.get(b["id"], {})):  # GOV-02
                     continue

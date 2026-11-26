@@ -161,6 +161,28 @@ enum Commands {
         #[command(subcommand)]
         cmd: CodexCommands,
     },
+    /// RATCHET-02: draft lint rules from canonical lessons that ban a `token`; accept ships one
+    #[command(args_conflicts_with_subcommands = true)]
+    Ratchet {
+        #[command(subcommand)]
+        cmd: Option<RatchetCommands>,
+        /// Playbook scope to scan (default: global and every project playbook)
+        scope: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RatchetCommands {
+    /// Ship a proposed rule (human step): appends it to _meta/ratchet_rules.jsonl
+    Accept {
+        rule_id: String,
+        #[arg(long, value_parser = ["vault", "repo"])]
+        target: Option<String>,
+        #[arg(long)]
+        glob: Option<String>,
+    },
+    /// List shipped rules
+    List,
 }
 
 #[derive(Subcommand, Debug)]
@@ -431,6 +453,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("pre-commit: lint failed with errors");
                     std::process::exit(1);
                 }
+                // RATCHET-02: shipped repo rules block staged files
+                let bad =
+                    ai_hive::ratchet::staged_violations(&cfg.vault, std::path::Path::new("."));
+                for (path, line, r) in &bad {
+                    println!(
+                        "ERROR ratchet-violation {path}:{line}: `{}` is banned by {}",
+                        r.pattern, r.id
+                    );
+                }
+                if !bad.is_empty() {
+                    std::process::exit(1);
+                }
 
                 println!("=== [2/2] Running Rust test suite ===");
                 let status = std::process::Command::new("cargo")
@@ -658,6 +692,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  proposal written to: {}", p.display());
                 }
             }
+            Commands::Ratchet { cmd, scope } => match cmd {
+                Some(RatchetCommands::Accept {
+                    rule_id,
+                    target,
+                    glob,
+                }) => {
+                    let r = ai_hive::ratchet::accept(
+                        &cfg.vault,
+                        &rule_id,
+                        target.as_deref(),
+                        glob.as_deref(),
+                    )?;
+                    println!(
+                        "ratchet: shipped {}: {} files matching {} must not contain `{}`; bullet {} is no longer injected",
+                        r.id, r.target, r.glob, r.pattern, r.bullet
+                    );
+                }
+                Some(RatchetCommands::List) => {
+                    let rules = ai_hive::ratchet::load_rules(&cfg.vault);
+                    if rules.is_empty() {
+                        println!("ratchet: no shipped rules");
+                    }
+                    for r in rules {
+                        println!("{}  {}  {}  `{}`", r.id, r.target, r.glob, r.pattern);
+                    }
+                }
+                None => {
+                    let scopes: Vec<String> = match scope {
+                        Some(s) => vec![ai_hive::common::validate_slug(&s)?],
+                        None => {
+                            let mut v: Vec<String> = fs::read_dir(cfg.vault.join("projects"))
+                                .map(|rd| {
+                                    rd.filter_map(Result::ok)
+                                        .filter(|e| e.path().join("playbook.md").is_file())
+                                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            v.sort();
+                            std::iter::once("global".to_string()).chain(v).collect()
+                        }
+                    };
+                    let written = ai_hive::ratchet::propose(
+                        &cfg.vault,
+                        &scopes,
+                        &ai_hive::ledger::resolve_agent(None),
+                        &ai_hive::ledger::resolve_session(None),
+                        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+                    )?;
+                    if written.is_empty() {
+                        println!("ratchet: no new candidates (canonical lessons that ban a `backticked` token)");
+                    }
+                    for p in written {
+                        println!("ratchet: proposal written to {}", p.display());
+                    }
+                }
+            },
             Commands::Handoff {
                 cmd:
                     CodexCommands::Write {
