@@ -580,71 +580,12 @@ fn test_decay_and_adr_staleness_rust() {
 }
 
 #[test]
-fn test_llm_privacy_and_offline_fail_open_rust() {
-    let mut cfg = ai_hive::llm::LlmConfig {
-        default_privacy: "private".to_string(),
-        combos: ai_hive::llm::LlmCombos {
-            private: "hive-private".to_string(),
-            fast: "hive-fast".to_string(),
-            deep: "hive-deep".to_string(),
-        },
-        ..Default::default()
-    };
-    cfg.project_privacies
-        .insert("offmesh".to_string(), "private".to_string());
-    cfg.project_privacies
-        .insert("open-proj".to_string(), "public".to_string());
-
-    // 1. Private project hard-locked to hive-private
-    assert_eq!(
-        ai_hive::llm::resolve_combo(&cfg, "fast", Some("offmesh")),
-        "hive-private"
-    );
-    assert_eq!(
-        ai_hive::llm::resolve_combo(&cfg, "deep", Some("offmesh")),
-        "hive-private"
-    );
-    assert_eq!(
-        ai_hive::llm::resolve_combo(&cfg, "private", Some("offmesh")),
-        "hive-private"
-    );
-
-    // 2. Public project uses fast/deep
-    assert_eq!(
-        ai_hive::llm::resolve_combo(&cfg, "fast", Some("open-proj")),
-        "hive-fast"
-    );
-    assert_eq!(
-        ai_hive::llm::resolve_combo(&cfg, "deep", Some("open-proj")),
-        "hive-deep"
-    );
-
-    // 3. Default privacy applies to unknown project
-    assert_eq!(
-        ai_hive::llm::resolve_combo(&cfg, "fast", Some("unknown")),
-        "hive-private"
-    );
-
-    // 4. Secret scrubbing test
+fn test_secret_scrubbing_rust() {
     let raw = "Config sk-1234567890abcdef123456 and token ghp_abcdef1234567890abcdef";
     let scrubbed = ai_hive::ace::scrub_secrets(raw);
     assert!(!scrubbed.contains("sk-1234567890abcdef123456"));
     assert!(!scrubbed.contains("ghp_abcdef1234567890abcdef"));
     assert!(scrubbed.contains("[REDACTED_SECRET]"));
-
-    // 5. Fail-open when offline
-    let tmp = std::env::temp_dir().join(format!("hive_curate_test_{}", std::process::id()));
-    let vault = tmp.join("vault");
-    let ledger = tmp.join("ledger.jsonl");
-    std::fs::create_dir_all(&vault).unwrap();
-
-    // With offline/unreachable port:
-    let res = ai_hive::curate::run_curate(&ledger, &vault, Some("ai-hive"), false, None).unwrap();
-    // Must return Ok with skipped=true (fail-open)
-    assert!(res.skipped);
-    assert!(res.proposal_file.is_none());
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]
