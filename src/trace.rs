@@ -137,9 +137,9 @@ pub fn propose(
     project: &str,
     now: i64,
 ) -> Result<Vec<std::path::PathBuf>, String> {
-    let rules = crate::governance::load_rules(vault);
+    let rules = crate::policy::load_rules(vault);
     let mut written = Vec::new();
-    for (t, w) in crate::governance::visible_traces(&rules, active(conn, project, now)?) {
+    for (t, w) in visible_traces(&rules, active(conn, project, now)?) {
         let Some(section) = PROPOSE_SECTIONS
             .iter()
             .find(|(k, _)| *k == t.kind)
@@ -296,6 +296,19 @@ pub fn context_section(items: &[(Trace, f64)], task: &str) -> String {
     )
 }
 
+/// Drop quarantined traces from active() output.
+pub fn visible_traces(
+    rules: &[crate::policy::Rule],
+
+    items: Vec<(Trace, f64)>,
+) -> Vec<(Trace, f64)> {
+    items
+        .into_iter()
+        .filter(|(t, _)| {
+            !crate::policy::is_quarantined(rules, &t.session_id, &t.agent, t.created_at)
+        })
+        .collect()
+}
 #[cfg(test)]
 mod tests {
     use super::*;

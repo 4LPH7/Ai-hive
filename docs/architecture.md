@@ -8,7 +8,7 @@ and rebuildable from disk.
 
 | Component | Rust File | Python File | Runs as | Writes |
 |-----------|-----------|-------------|---------|--------|
-| MCP Server & Search | `src/index.rs`, `src/mcp.rs` | `hive.py` | Stdio process per agent session | Only disposable index (`hive.sqlite`) |
+| MCP Server & Search | `src/index.rs`, `src/mcp.rs` (+ `src/mcp/{schema,validate,tools}.rs`) | `hive.py` | Stdio process per agent session | Only disposable index (`hive.sqlite`) |
 | Code Graph Engine | `src/graph.rs` | `hive.py` | In-memory during MCP session | Read-only |
 | Auto-Skill Engine | `src/skill.rs` | `skill.py` | MCP tool + CLI (`hive skill`) | `.skill-lock.json` and approved local skills |
 | ACE Curator & Locks | `src/ace.rs` | `ace.py` | CLI & session hooks | Playbooks under atomic `PlaybookLock` |

@@ -54,7 +54,7 @@ before it repeats the mistake:
 | 🐜 **Stigmergy** | Agents leave `DEAD_END`, `RECENT_FIX` and `HOT_FILE` traces that decay by half-life. Only a *different* real session can reinforce one | `trace.rs`, `traces.py` |
 | 📜 **Codices** | Session checkpoints become immutable notes sealed with `content_sha256`. Editing one is a lint `ERROR` | `codex.rs`, `codex.py` |
 | 📬 **Handoffs** | Role-aware, token-bounded transfer of outcomes, completed steps, files, dead ends and open threads | `hive handoff`, `codex.rs` |
-| ✂️ **Concise output** | Search, graph and lint return short results by default; request full detail when needed | `mcp.rs` |
+| ✂️ **Concise output** | Search, graph and lint return short results by default; request full detail when needed | `src/mcp/tools.rs` |
 | 📦 **Artifact offload** | Large MCP results are secret-scrubbed and cached outside the vault and project repositories; old files are purged on writes | `artifact.rs`, `artifacts.py` |
 | 🗳️ **Quorum** | New lessons start as *scouts*. Only bullets backed by 2+ sessions with score ≥ 1.5 become *canonical* and reach agents | `quorum.rs`, `quorum.py` |
 | ⚔️ **Conflicts** | Contradicting lessons are detected; a challenger must beat the incumbent by +1.0. Losers are hidden, never deleted | `curate.rs`, `_meta/_conflicts.md` |

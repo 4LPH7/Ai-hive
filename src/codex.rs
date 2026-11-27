@@ -350,7 +350,7 @@ pub fn context_section(vault: &Path, project: &str, task: &str) -> String {
         .unwrap_or_default();
     notes.retain(|p| p.extension().is_some_and(|x| x == "md"));
     // GOV-02: quarantined codices never reach agents
-    let hidden = crate::governance::quarantined_paths(vault, &crate::governance::load_rules(vault));
+    let hidden = crate::policy::quarantined_paths(vault, &crate::policy::load_rules(vault));
     notes.retain(|p| {
         p.strip_prefix(vault)
             .map(|r| !hidden.contains(&r.to_string_lossy().replace('\\', "/")))
@@ -531,9 +531,9 @@ fn load_handoff(
             "handoff: {hid} has no provenance_sha256 (written before v2.7.2); write it again"
         ));
     }
-    let (session, agent, ts) = crate::governance::note_origin(&text);
-    let rules = crate::governance::load_rules(vault);
-    if crate::governance::is_quarantined(&rules, &session, &agent, ts) {
+    let (session, agent, ts) = crate::policy::note_origin(&text);
+    let rules = crate::policy::load_rules(vault);
+    if crate::policy::is_quarantined(&rules, &session, &agent, ts) {
         return Err(format!("handoff: {hid} is quarantined"));
     }
     Ok((rel, path, text))
@@ -551,7 +551,7 @@ pub fn handoff_view(
     use crate::common::est_tokens;
     let (rel, path, text) = load_handoff(vault, project, hid)?;
     let (goal, outcome, line) = body_head(&text);
-    let (session, agent, _) = crate::governance::note_origin(&text);
+    let (session, agent, _) = crate::policy::note_origin(&text);
     let (meta, _, _) = crate::index::parse_note(&text);
     let secs = sections(&text);
     let get = |t: &str| secs.get(t).cloned().unwrap_or_default();
@@ -1061,7 +1061,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !crate::governance::load_rules(&tmp).is_empty(),
+            !crate::policy::load_rules(&tmp).is_empty(),
             "fixture rule must load"
         );
         assert!(handoff_view(&tmp, "demo", &id, 1500)
