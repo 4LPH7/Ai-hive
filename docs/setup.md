@@ -28,6 +28,12 @@ python -m unittest discover  # Python suite: tests/python/
 
 All tests use temporary folders; none touch your vault.
 
+Contributors: enable the repo's pre-commit gates (fmt, clippy, `cargo test`, unittest) once per clone with
+`git config core.hooksPath .githooks`. They run through `scripts/testcache.py`, which reuses a pass recorded
+for the same HEAD, uncommitted diff and command (stored in `.git/hive-testcache.json`), so repeating a commit
+attempt or re-running CI on a tested commit costs seconds. Failures always re-run; force a real run with
+`HIVE_TESTCACHE_FORCE=1 git commit` or `python scripts/testcache.py run --force -- <cmd>`.
+
 ## Step 3: Lay out the vault
 
 Create this structure (see [vault-conventions.md](vault-conventions.md) for the full contract):

@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
 
+# Test commands run through scripts/testcache.py. Its results (.git/hive-testcache.json) are cached per job
+# and commit, so a re-run or a second push of an already-tested commit reuses the passing result instead of
+# re-testing. A failure is never reused. Set TESTCACHE_FORCE to "--force" in a manual re-run to test anyway.
+env:
+  TESTCACHE_FORCE: ""
+
 jobs:
   unittest-arch:
     name: unittest (archlinux)
@@ -18,8 +24,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Configure safe directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/cache@v4
+        with:
+          path: .git/hive-testcache.json
+          key: testcache-${{ github.job }}-${{ github.sha }}
       - name: Run tests (stdlib only, no model downloads)
-        run: python -W error::SyntaxWarning -m unittest -v
+        run: python scripts/testcache.py run $TESTCACHE_FORCE -- python -W error::SyntaxWarning -m unittest -v
       - name: Packaging smoke test
         run: |
           pip install --no-build-isolation --no-deps --break-system-packages .
@@ -37,8 +47,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/cache@v4
+        with:
+          path: .git/hive-testcache.json
+          key: testcache-${{ github.job }}-${{ matrix.python }}-${{ github.sha }}
       - name: Run tests (stdlib only, no model downloads)
-        run: python -W error::SyntaxWarning -m unittest -v
+        run: python scripts/testcache.py run $env:TESTCACHE_FORCE -- python -W error::SyntaxWarning -m unittest -v
       - name: Packaging smoke test
         run: |
           pip install --no-build-isolation --no-deps .
@@ -53,12 +67,16 @@ jobs:
       - name: Update pacman keyring and install dependencies
         run: |
           pacman -Sy --noconfirm archlinux-keyring
-          pacman -Syu --noconfirm --needed git rust
+          pacman -Syu --noconfirm --needed git rust python
       - uses: actions/checkout@v4
       - name: Configure safe directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/cache@v4
+        with:
+          path: .git/hive-testcache.json
+          key: testcache-${{ github.job }}-${{ github.sha }}
       - name: Run Rust unit and integration tests
-        run: cargo test --verbose
+        run: python scripts/testcache.py run $TESTCACHE_FORCE -- cargo test --verbose
       - name: Build release binary
         run: cargo build --release
 
@@ -70,11 +88,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: actions/cache@v4
+        with:
+          path: .git/hive-testcache.json
+          key: testcache-${{ github.job }}-${{ github.sha }}
       - name: Run cargo fmt check
         run: cargo fmt --check
       - name: Run cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: python scripts/testcache.py run $env:TESTCACHE_FORCE -- cargo clippy --all-targets -- -D warnings
       - name: Run Rust unit and integration tests
-        run: cargo test --verbose
+        run: python scripts/testcache.py run $env:TESTCACHE_FORCE -- cargo test --verbose
       - name: Build release binary
         run: cargo build --release
