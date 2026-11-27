@@ -1240,3 +1240,63 @@ fn test_ace_hooks_read_stdin_and_checkpoint_once() {
     assert_eq!(run(&["ace", "hook-stop"], &active.to_string()).trim(), "");
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// F2 regression: a ledger path set in `--config` must receive records written from the MCP server, not only
+/// from the CLI path. Before the single config owner, `mcp.rs` re-read the default config and wrote elsewhere.
+#[test]
+fn test_config_ledger_override_reaches_mcp_records() {
+    use std::io::Write;
+    let tmp = std::env::temp_dir().join(format!("hive_cfg_ledger_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let vault = tmp.join("vault");
+    std::fs::create_dir_all(vault.join("projects").join("demo")).unwrap();
+    std::fs::write(
+        vault.join("projects").join("demo").join("note.md"),
+        "---\ntype: note\nproject: demo\nagent: claude\nstatus: active\nupdated: 2026-11-27\nsource: test\n---\n# Lint target\n\nprice fetcher notes.\n",
+    )
+    .unwrap();
+    let ledger = tmp.join("custom-ledger.jsonl");
+    let cfg = tmp.join("hive.toml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "vault = \"{}\"\ndb = \"{}\"\nledger = \"{}\"\n",
+            vault
+                .display()
+                .to_string()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+            tmp.join("hive.sqlite")
+                .display()
+                .to_string()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+            ledger
+                .display()
+                .to_string()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+        ),
+    )
+    .unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+        .args(["--config", cfg.to_str().unwrap(), "serve"])
+        .env("HIVE_SESSION_ID", "cfg-test")
+        .env("HIVE_AGENT", "claude")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let req = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "hive_skill", "arguments": {"task": "zebra quantum ledger check", "scope": "local", "auto_install": false}}});
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{req}\n").as_bytes())
+        .unwrap();
+    let _ = child.wait_with_output().unwrap();
+    let written = std::fs::read_to_string(&ledger).unwrap_or_default();
+    assert!(
+        written.contains("\"event\":\"skill\""),
+        "ledger at --config path got: {written}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

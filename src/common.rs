@@ -354,16 +354,33 @@ pub fn load_config(
     }
 }
 
+static ACTIVE: std::sync::OnceLock<HiveConfig> = std::sync::OnceLock::new();
+
+/// Set once by the binary's `main` right after the CLI/env/config merge. Every default path below reads this
+/// one value, so a `--vault`, `--projects`, `--db` or `--config` override reaches every writer (ledger, index,
+/// artifacts, graph roots), not only the code path that received the parsed config.
+pub fn set_config(cfg: HiveConfig) {
+    let _ = ACTIVE.set(cfg);
+}
+
+/// The config in effect: the one `set_config` installed, else the config resolved from env and files.
+pub fn active_config() -> HiveConfig {
+    ACTIVE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| load_config(None, None, None, None))
+}
+
 pub fn default_vault() -> PathBuf {
-    load_config(None, None, None, None).vault
+    active_config().vault
 }
 
 pub fn default_projects() -> PathBuf {
-    load_config(None, None, None, None).projects
+    active_config().projects
 }
 
 pub fn default_db_path() -> PathBuf {
-    load_config(None, None, None, None).db
+    active_config().db
 }
 
 #[cfg(test)]

@@ -307,6 +307,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let cli = Cli::parse();
         let cfg = load_config(cli.vault, cli.projects, cli.db, cli.config.as_deref());
+        ai_hive::common::set_config(cfg.clone());
         match cli.command.unwrap_or(Commands::Serve {
             vault: None,
             db: None,

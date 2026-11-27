@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub fn default_ledger_path() -> PathBuf {
-    crate::common::load_config(None, None, None, None).ledger
+    crate::common::active_config().ledger
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
