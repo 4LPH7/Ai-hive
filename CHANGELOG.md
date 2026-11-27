@@ -5,7 +5,14 @@ All notable changes to `ai-hive` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - v2.8.0 (Phase 8 addendum)
+## [2.8.0] - 2026-11-27
+
+### Performance
+- Graph load: `split_ident` compiled its regex once per node per load; now a `OnceLock`. A 3,427-node graph loads in ~38 ms (was ~205 ms), 2,247 nodes in ~26 ms (was ~145 ms). Measured with `hive bench`.
+
+### Fixed
+- A corrupt index that cannot be renamed aside is now deleted and rebuilt from the vault. Previously every run printed "is corrupt" and read a `.recovered` copy.
+
 
 ### Removed (ponytail audit)
 - `src/llm.rs` and `src/curate.rs` (OmniRoute curator, `hive curate`): `ureq` dependency dropped. Conflict judging stays in `quorum`. Restore from git history if a curator returns.
