@@ -388,7 +388,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         project,
                         repo,
                     }) => {
-                        let res = ai_hive::ledger::score_session(
+                        let res = ai_hive::scoring::score_session(
                             &cfg.ledger,
                             &cfg.vault,
                             session.as_deref(),

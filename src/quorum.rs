@@ -467,7 +467,7 @@ pub fn valid_failure_ref(raw: &str) -> String {
     let ok = (4..=120).contains(&r.chars().count())
         && r.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
         && r.chars().all(safe)
-        && !crate::ace::is_secret(r);
+        && !crate::secrets::is_secret(r);
     if ok {
         r.to_string()
     } else {

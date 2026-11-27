@@ -17,5 +17,7 @@ pub mod miner;
 pub mod packer;
 pub mod quorum;
 pub mod ratchet;
+pub mod scoring;
+pub mod secrets;
 pub mod skill;
 pub mod trace;

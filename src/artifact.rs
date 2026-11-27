@@ -124,7 +124,7 @@ pub fn offload_in(text: &str, folder: &Path, guard_roots: &[&Path]) -> String {
     if crate::common::est_tokens(text) <= OFFLOAD_TOKENS {
         return text.to_string();
     }
-    let scrubbed = crate::ace::scrub_secrets(text);
+    let scrubbed = crate::secrets::scrub_secrets(text);
     let path = match store(&scrubbed, folder, guard_roots) {
         Ok(p) => p,
         Err(e) => {

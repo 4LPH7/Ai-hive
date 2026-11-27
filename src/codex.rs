@@ -77,7 +77,7 @@ fn check_text(name: &str, value: &str) -> Result<(), String> {
             "codex: {name} must be one line of at most {MAX_ITEM_CHARS} chars"
         ));
     }
-    if crate::ace::is_secret(value) {
+    if crate::secrets::is_secret(value) {
         return Err(format!("codex: {name} looks like it contains a secret"));
     }
     Ok(())

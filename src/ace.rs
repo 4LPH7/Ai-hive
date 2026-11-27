@@ -168,19 +168,7 @@ impl Drop for PlaybookLock {
     }
 }
 
-pub fn is_secret(text: &str) -> bool {
-    let re = Regex::new(
-        r"(?i)(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,})"
-    ).unwrap();
-    re.is_match(text)
-}
-
-pub fn scrub_secrets(text: &str) -> String {
-    let re = Regex::new(
-        r"(?i)(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,})"
-    ).unwrap();
-    re.replace_all(text, "[REDACTED_SECRET]").to_string()
-}
+pub use crate::secrets::{is_secret, scrub_secrets};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Bullet {
