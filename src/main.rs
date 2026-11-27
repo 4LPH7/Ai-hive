@@ -1,4 +1,4 @@
-use ai_hive::ace::{apply_with_lock, load, DeltaOps};
+use ai_hive::ace::DeltaOps;
 use ai_hive::bench::run_bench;
 use ai_hive::common::{default_db_path, load_config};
 use ai_hive::eval::run_eval;
@@ -253,50 +253,6 @@ fn hook_input() -> ai_hive::hooks::HookInput {
         let _ = std::io::stdin().read_to_string(&mut buf);
     }
     ai_hive::hooks::HookInput::parse(&buf)
-}
-
-/// Ratchet scopes: the given one, else `global` plus every project with a playbook (sorted).
-fn ratchet_scopes(
-    vault: &std::path::Path,
-    scope: Option<String>,
-) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    if let Some(s) = scope {
-        return Ok(vec![ai_hive::common::validate_slug(&s)?]);
-    }
-    let mut v: Vec<String> = fs::read_dir(vault.join("projects"))
-        .map(|rd| {
-            rd.filter_map(Result::ok)
-                .filter(|e| e.path().join("playbook.md").is_file())
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
-    v.sort();
-    Ok(std::iter::once("global".to_string()).chain(v).collect())
-}
-
-/// Write a codex or handoff note, its DEAD_END traces and any GOV-04 proposals.
-fn write_record(
-    vault: &std::path::Path,
-    db: &std::path::Path,
-    project: &str,
-    rec: &ai_hive::codex::Record,
-) -> Result<(PathBuf, Vec<PathBuf>), Box<dyn std::error::Error>> {
-    let conn = ai_hive::index::open_db(db)?.0; // heals a corrupt index
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")?;
-    let path = ai_hive::codex::write(
-        vault,
-        &conn,
-        project,
-        rec,
-        &ai_hive::ledger::resolve_agent(None),
-        &ai_hive::ledger::resolve_session(None),
-        &chrono::Local::now().format("%Y-%m-%d").to_string(),
-        chrono::Utc::now().timestamp(),
-    )?;
-    let slug = ai_hive::common::validate_slug(project)?;
-    let proposals = ai_hive::trace::propose(vault, &conn, &slug, chrono::Utc::now().timestamp())?;
-    Ok((path, proposals))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -713,7 +669,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
             } => {
                 let rec = ai_hive::codex::parse(&fs::read_to_string(&record_file)?)?;
-                let (path, proposals) = write_record(&cfg.vault, &cfg.db, &project, &rec)?;
+                let (path, proposals) = ai_hive::codex::write_record(
+                    &cfg.vault,
+                    &cfg.db,
+                    &project,
+                    &rec,
+                    &ai_hive::ledger::resolve_agent(None),
+                    &ai_hive::ledger::resolve_session(None),
+                    &chrono::Local::now().format("%Y-%m-%d").to_string(),
+                    chrono::Utc::now().timestamp(),
+                )?;
                 println!(
                     "codex: wrote {} ({} dead-end traces)",
                     path.display(),
@@ -785,7 +750,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(RatchetCommands::Release { scope }) => {
                     let written = ai_hive::ratchet::propose_release(
                         &cfg.vault,
-                        &ratchet_scopes(&cfg.vault, scope)?,
+                        &ai_hive::ratchet::scopes(&cfg.vault, scope)?,
                         &ai_hive::ledger::read_ledger(&cfg.ledger, None, None),
                         &ai_hive::ledger::resolve_agent(None),
                         &ai_hive::ledger::resolve_session(None),
@@ -802,7 +767,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 None => {
-                    let scopes = ratchet_scopes(&cfg.vault, scope)?;
+                    let scopes = ai_hive::ratchet::scopes(&cfg.vault, scope)?;
                     let written = ai_hive::ratchet::propose(
                         &cfg.vault,
                         &scopes,
@@ -826,7 +791,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
             } => {
                 let rec = ai_hive::codex::parse_handoff(&fs::read_to_string(&record_file)?)?;
-                let (path, proposals) = write_record(&cfg.vault, &cfg.db, &project, &rec)?;
+                let (path, proposals) = ai_hive::codex::write_record(
+                    &cfg.vault,
+                    &cfg.db,
+                    &project,
+                    &rec,
+                    &ai_hive::ledger::resolve_agent(None),
+                    &ai_hive::ledger::resolve_session(None),
+                    &chrono::Local::now().format("%Y-%m-%d").to_string(),
+                    chrono::Utc::now().timestamp(),
+                )?;
                 let slug = ai_hive::common::validate_slug(&project)?;
                 let role = rec.role.clone().unwrap_or_default();
                 let budget = ai_hive::codex::role_budget(&role).unwrap_or(0);
@@ -855,29 +829,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             buf
                         };
                         let ops: DeltaOps = ai_hive::ace::parse_delta(&json_str)?;
-                        let ids = |v: &std::path::Path| -> std::collections::HashSet<String> {
-                            load(v, &scope)
-                                .map(|s| s.values().flatten().map(|b| b.id.clone()).collect())
-                                .unwrap_or_default()
-                        };
-                        let before = ids(&vault);
-                        let changed = apply_with_lock(&vault, &scope, &ops)?;
-                        let mut added: Vec<String> =
-                            ids(&vault).difference(&before).cloned().collect();
-                        added.sort();
-                        let content_sha = ai_hive::ace::scope_path(&vault, &scope)
-                            .ok()
-                            .and_then(|p| fs::read(p).ok())
-                            .map(|b| ai_hive::common::sha256(&b))
-                            .unwrap_or_default();
-                        let cwd = std::env::current_dir().unwrap_or_default();
-                        ai_hive::ledger::record_ace_apply(
-                            &cfg.ledger,
-                            &scope,
-                            &added,
-                            &content_sha,
-                            &ai_hive::ledger::repo_head(&cwd),
-                        );
+                        let changed =
+                            ai_hive::ace::apply_recorded(&vault, &cfg.ledger, &scope, &ops)?;
                         println!("ace: applied {} changes to {}", changed, scope);
                     }
                     AceCommands::Show { scope, task } => {

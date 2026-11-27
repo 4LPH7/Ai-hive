@@ -355,6 +355,23 @@ pub fn propose_release(
     Ok(written)
 }
 
+/// Scopes a ratchet run covers: the given one, else `global` plus every project folder with a playbook (sorted).
+pub fn scopes(vault: &Path, scope: Option<String>) -> Result<Vec<String>, String> {
+    if let Some(s) = scope {
+        return Ok(vec![crate::common::validate_slug(&s)?]);
+    }
+    let mut v: Vec<String> = std::fs::read_dir(vault.join("projects"))
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .filter(|e| e.path().join("playbook.md").is_file())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    Ok(std::iter::once("global".to_string()).chain(v).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

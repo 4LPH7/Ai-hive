@@ -659,6 +659,28 @@ pub fn handoff_view(
     Ok(parts.join("\n\n"))
 }
 
+/// Writes a codex or handoff note and its DEAD_END traces, then drafts any GOV-04 playbook proposals. Returns
+/// the note path and the proposal paths. Shared by `hive codex write` and `hive handoff write`.
+#[allow(clippy::too_many_arguments)]
+pub fn write_record(
+    vault: &Path,
+    db: &Path,
+    project: &str,
+    rec: &Record,
+    agent: &str,
+    session: &str,
+    date: &str,
+    now: i64,
+) -> Result<(PathBuf, Vec<PathBuf>), String> {
+    let conn = crate::index::open_db(db).map_err(|e| e.to_string())?.0; // heals a corrupt index
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000;")
+        .map_err(|e| e.to_string())?;
+    let path = write(vault, &conn, project, rec, agent, session, date, now)?;
+    let slug = crate::common::validate_slug(project)?;
+    let proposals = crate::trace::propose(vault, &conn, &slug, now)?;
+    Ok((path, proposals))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

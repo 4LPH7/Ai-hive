@@ -863,6 +863,39 @@ pub fn format_rows(rows: &[(String, String, Bullet)]) -> String {
         .join("\n")
 }
 
+/// Applies a delta under the playbook lock and records what it did: the ids it added (for provenance) and the
+/// playbook's content sha. Returns the number of changes. The CLI and any other caller use this one path.
+pub fn apply_recorded(
+    vault: &Path,
+    ledger: &Path,
+    scope: &str,
+    ops: &DeltaOps,
+) -> Result<usize, String> {
+    let ids = |v: &Path| -> HashSet<String> {
+        load(v, scope)
+            .map(|s| s.values().flatten().map(|b| b.id.clone()).collect())
+            .unwrap_or_default()
+    };
+    let before = ids(vault);
+    let changed = apply_with_lock(vault, scope, ops)?;
+    let mut added: Vec<String> = ids(vault).difference(&before).cloned().collect();
+    added.sort();
+    let content_sha = scope_path(vault, scope)
+        .ok()
+        .and_then(|p| std::fs::read(p).ok())
+        .map(|b| crate::common::sha256(&b))
+        .unwrap_or_default();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    crate::ledger::record_ace_apply(
+        ledger,
+        scope,
+        &added,
+        &content_sha,
+        &crate::ledger::repo_head(&cwd),
+    );
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
