@@ -174,6 +174,7 @@ fn test_rust_concurrent_writers_no_lost_updates() {
                 add: Some(vec![ai_hive::ace::AddOp {
                     section: "strategies".to_string(),
                     content: format!("Thread A bullet {:02}", i),
+                    failure_ref: None,
                 }]),
                 tag: None,
                 remove: None,
@@ -189,6 +190,7 @@ fn test_rust_concurrent_writers_no_lost_updates() {
                 add: Some(vec![ai_hive::ace::AddOp {
                     section: "pitfalls".to_string(),
                     content: format!("Thread B bullet {:02}", i),
+                    failure_ref: None,
                 }]),
                 tag: None,
                 remove: None,
@@ -1029,5 +1031,137 @@ fn test_handoff_write_warns_when_core_exceeds_role_budget() {
     let out = run(&["handoff", "write", "demo", small.to_str().unwrap()]);
     assert!(out.status.success());
     assert!(!String::from_utf8_lossy(&out.stderr).contains("over the"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// RATCHET-02 + Phase 8 gate through the binary: propose, accept, lint ERROR, and a staged repo file blocked.
+#[test]
+fn test_ratchet_cli_propose_accept_lint_and_staged() {
+    let tmp = std::env::temp_dir().join(format!("hive_ratchet_cli_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let vault = tmp.join("vault");
+    std::fs::create_dir_all(vault.join("_meta")).unwrap();
+    std::fs::write(
+        vault.join("_meta").join("playbook.md"),
+        "## commands\n- [cmd-00003] seen=6 helpful=6 harmful=0 :: Never run `python -c` in the lean-ctx shell; write a script file and run python -I script.py.\n",
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .env("HIVE_DB", tmp.join("hive.sqlite"))
+            .env("HIVE_LEDGER", tmp.join("ledger.jsonl"))
+            .env("HIVE_VAULT", &vault)
+            .env("HIVE_SESSION_ID", "ratchet-test")
+            .env("HIVE_AGENT", "claude")
+            .output()
+            .unwrap()
+    };
+    let text = |o: &std::process::Output| String::from_utf8_lossy(&o.stdout).into_owned();
+    let out = run(&["ratchet"]);
+    assert!(
+        text(&out).contains("ratchet-rat-global-cmd-00003.md"),
+        "{}",
+        text(&out)
+    );
+    assert!(text(&run(&["ratchet", "global"])).contains("no new candidates"));
+    let note = vault.join("notes").join("howto.md");
+    std::fs::create_dir_all(note.parent().unwrap()).unwrap();
+    std::fs::write(&note, "---\ntype: note\nproject: demo\nagent: user\nstatus: active\nupdated: 2026-11-26\n---\n# how\n\nrun python -c 'x'\n").unwrap();
+    let ok = run(&[
+        "ratchet",
+        "accept",
+        "rat-global-cmd-00003",
+        "--target",
+        "vault",
+        "--glob",
+        "**/*.md",
+    ]);
+    assert!(
+        text(&ok).contains("shipped rat-global-cmd-00003"),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert!(text(&run(&["lint"])).contains("ratchet-violation"));
+    assert!(text(&run(&["ratchet", "list"])).contains("rat-global-cmd-00003"));
+    assert!(!run(&["ratchet", "accept", "rat-global-cmd-00003"])
+        .status
+        .success());
+    // repo target: a staged .py file with the token is a violation
+    std::fs::write(
+        ai_hive::ratchet::rules_path(&vault),
+        r#"{"id":"rat-global-cmd-00003","scope":"global","bullet":"cmd-00003","pattern":"python -c","target":"repo","glob":"**/*.py","message":"m"}"#.to_string() + "\n",
+    )
+    .unwrap();
+    let repo = tmp.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(
+        repo.join("tool.py"),
+        "import os\n\nos.system(\"python -c 'x'\")\n",
+    )
+    .unwrap();
+    assert!(ai_hive::ratchet::staged_violations(&vault, &repo).is_empty());
+    git(&["add", "tool.py"]);
+    let bad = ai_hive::ratchet::staged_violations(&vault, &repo);
+    assert_eq!(bad.len(), 1);
+    assert_eq!((bad[0].0.as_str(), bad[0].1), ("tool.py", 3));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// QUOR-06 through the binary: a different agent + session with an artifact counts as verify (1.5);
+/// the author's own agent does not.
+#[test]
+fn test_verify_cli_cross_agent_weight() {
+    let tmp = std::env::temp_dir().join(format!("hive_verify_cli_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let vault = tmp.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    let run = |args: &[&str], session: &str, agent: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .env("HIVE_DB", tmp.join("hive.sqlite"))
+            .env("HIVE_LEDGER", tmp.join("ledger.jsonl"))
+            .env("HIVE_VAULT", &vault)
+            .env("HIVE_SESSION_ID", session)
+            .env("HIVE_AGENT", agent)
+            .output()
+            .unwrap()
+    };
+    let delta = tmp.join("delta.json");
+    std::fs::write(&delta, r#"{"operations": [{"type": "ADD", "section": "pitfalls", "failure_ref": "commit:abc1234", "content": "verify lesson about cache invalidation"}]}"#).unwrap();
+    assert!(run(
+        &["ace", "apply", "demo", delta.to_str().unwrap()],
+        "sess-a",
+        "claude"
+    )
+    .status
+    .success());
+    let artifact = tmp.join("review.diff");
+    std::fs::write(&artifact, "--- a/x\n+++ b/x\n@@ reviewed @@\n").unwrap();
+    let a = artifact.to_str().unwrap();
+    let same = run(&["verify", "demo", "pit-00001", a], "sess-b", "claude");
+    let out = String::from_utf8_lossy(&same.stdout);
+    assert!(
+        out.contains("counted as confirm"),
+        "{out}{}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+    let cross = run(&["verify", "demo", "pit-00001", a], "sess-c", "codex");
+    let out = String::from_utf8_lossy(&cross.stdout);
+    assert!(
+        out.contains("counted as verify") && out.contains("state canonical"),
+        "{out}"
+    );
+    assert!(!run(&["verify", "demo", "pit-99999", a], "sess-d", "codex")
+        .status
+        .success());
     let _ = std::fs::remove_dir_all(&tmp);
 }

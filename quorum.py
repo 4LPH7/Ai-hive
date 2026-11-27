@@ -15,8 +15,20 @@ STATES = ("scout", "quorum", "canonical", "retired")
 DEFAULT_STATE = "canonical"
 FIELDS = ("id", "state", "origin_session", "origin_agent")
 EVIDENCE_FIELDS = ("session", "agent", "kind")
-# QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0)
-WEIGHTS = {"test_pass": 1.0, "confirm": 1.0, "self_tag": 0.35}
+# QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0).
+# QUOR-06: `verify` = a different agent in a different session checked the lesson and left an evidence artifact
+# (review diff, test log, screenshot), recorded as its sha256; without both it never counts.
+WEIGHTS = {"verify": 1.5, "test_pass": 1.0, "confirm": 1.0, "self_tag": 0.35}
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _valid_evidence(e, origin_session, origin_agent):
+    if not isinstance(e, dict) or e.get("kind") not in WEIGHTS or not e.get("session"):
+        return False
+    if e["kind"] != "verify":
+        return True
+    return (bool(SHA256_RE.fullmatch(str(e.get("artifact", "")))) and e["session"] not in (origin_session, ANONYMOUS)
+            and bool(e.get("agent")) and e.get("agent") != origin_agent)
 # QUOR-03: canonical at score >= PROMOTE_SCORE from >= PROMOTE_SESSIONS sessions; >= 2 sessions below it = quorum
 PROMOTE_SCORE = 1.5
 PROMOTE_SESSIONS = 2
@@ -31,9 +43,12 @@ def _clean(rec):
         out["origin_ts"] = int(rec.get("origin_ts") or 0)
     except (TypeError, ValueError):
         out["origin_ts"] = 0
+    if "failure_ref" in rec:  # RATCHET-01: absent on legacy records (no restriction), "" on unsourced scouts
+        out["failure_ref"] = str(rec.get("failure_ref") or "")
     ev = rec.get("evidence") if isinstance(rec.get("evidence"), list) else []
-    out["evidence"] = [{k: str(e.get(k, "")) for k in EVIDENCE_FIELDS} for e in ev
-                       if isinstance(e, dict) and e.get("kind") in WEIGHTS and e.get("session")]
+    out["evidence"] = [dict({k: str(e.get(k, "")) for k in EVIDENCE_FIELDS},
+                            **({"artifact": str(e["artifact"])} if e.get("artifact") else {}))
+                       for e in ev if _valid_evidence(e, out["origin_session"], out["origin_agent"])]
     return out
 
 
@@ -104,8 +119,13 @@ def add_evidence(meta, tags, gates_by_id=None):
             session, kind = ANONYMOUS, "self_tag"
         else:
             kind = "test_pass" if hint == "test_pass" else "self_tag" if session == rec["origin_session"] else "confirm"
-        if not any(e["session"] == session and e["kind"] == kind for e in rec["evidence"]):
-            rec["evidence"].append({"session": session, "agent": agent, "kind": kind})
+        entry = {"session": session, "agent": agent, "kind": kind}
+        artifact = str(hint)[7:] if str(hint).startswith("verify:") else ""
+        if artifact and _valid_evidence(dict(entry, kind="verify", artifact=artifact),
+                                        rec["origin_session"], rec["origin_agent"]):
+            entry = dict(entry, kind="verify", artifact=artifact)  # QUOR-06; otherwise the plain kind above
+        if not any(e["session"] == session and e["kind"] == entry["kind"] for e in rec["evidence"]):
+            rec["evidence"].append(entry)
         out[bullet_id] = promote(rec, (gates_by_id or {}).get(bullet_id, PROMOTE_SCORE))
     return out
 
@@ -113,7 +133,7 @@ def add_evidence(meta, tags, gates_by_id=None):
 def promote(rec, gate=PROMOTE_SCORE):
     """QUOR-03: scout -> quorum (>= 2 sessions) -> canonical (and score >= gate, 1.5 unless a QUOR-04 conflict
     raises it). Never demotes here; retired stays."""
-    if rec["state"] not in ("scout", "quorum") or len(sessions(rec)) < PROMOTE_SESSIONS:
+    if rec["state"] not in ("scout", "quorum") or len(sessions(rec)) < PROMOTE_SESSIONS or unsourced(rec):
         return rec
     return dict(rec, state="canonical" if score(rec) >= gate else "quorum")
 
@@ -221,8 +241,41 @@ def sessions(rec):
 
 
 def score(rec):
-    """Sum over sessions of each session's strongest evidence weight."""
+    """Sum over sessions of each session's strongest evidence weight; 0 for an unsourced scout (RATCHET-01)."""
+    if unsourced(rec):
+        return 0.0
     best = {}
     for e in _clean(rec)["evidence"]:
         best[e["session"]] = max(best.get(e["session"], 0.0), WEIGHTS[e["kind"]])
     return round(sum(best.values()), 6)
+
+
+# ---------------------------------------------------------------- RATCHET-01 failure refs
+# A lesson must cite the failure it came from: a commit sha, an error hash or a session id. An ADD without a
+# valid ref still lands, as a scout with weight 0 that never promotes, until a later ADD of the same lesson
+# cites one. Records written before RATCHET-01 have no failure_ref key and keep their old behaviour.
+FAILURE_REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/#@+-]{3,119}")
+
+
+def valid_failure_ref(ref):
+    """The ref when it is a plausible pointer (4-120 safe chars, no secret), else ""."""
+    import ace
+    ref = str(ref or "").strip()
+    return ref if FAILURE_REF_RE.fullmatch(ref) and not ace.SECRET_RE.search(ref) else ""
+
+
+def unsourced(rec):
+    return rec.get("failure_ref", None) == ""
+
+
+def cite(meta, refs, added):
+    """New scouts get their failure_ref ("" when none); an existing unsourced bullet gains a ref when the same
+    lesson is proposed again with one."""
+    out = {i: dict(r) for i, r in meta.items()}
+    for i in added:
+        if i in out:
+            out[i]["failure_ref"] = refs.get(i, "")
+    for i, ref in refs.items():
+        if ref and i not in added and i in out and unsourced(out[i]):
+            out[i]["failure_ref"] = ref
+    return out

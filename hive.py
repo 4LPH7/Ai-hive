@@ -1343,6 +1343,85 @@ def tool_codex(*args):
     return f"codex: wrote {path} ({len(rec['dead_ends'])} dead-end traces)"
 
 
+def tool_verify(*args):
+    """QUOR-06 CLI fallback: `verify <scope> <bullet-id> <artifact-file>` records cross-agent verification. It
+    weighs 1.5 only from a different agent and session than the lesson's author; otherwise it counts as a plain
+    confirm or self-tag. The artifact (review diff, test log, screenshot) is stored as its sha256."""
+    import datetime
+    import hashlib
+    import ace
+    import ledger
+    import quorum
+    if len(args) != 3:
+        raise SystemExit("usage: hive verify <scope> <bullet-id> <artifact-file>")
+    scope, bullet_id, artifact = validate_slug(args[0]), args[1], args[2]
+    try:
+        data = Path(artifact).read_bytes()
+    except OSError as exc:
+        raise SystemExit(f"verify: cannot read artifact: {exc}")
+    if not data.strip():
+        raise SystemExit("verify: artifact is empty")
+    sha = hashlib.sha256(data).hexdigest()
+    session, agent = ledger.resolve_session(), ledger.resolve_agent()
+    path = ace.scope_path(scope)
+    with ace.PlaybookLock(path):
+        bullets = [b for bs in ace.load(scope).values() for b in bs]
+        if bullet_id not in {b["id"] for b in bullets}:
+            raise SystemExit(f"verify: no bullet {bullet_id} in {scope}")
+        meta_file = quorum.meta_path(path)
+        meta = quorum.load(meta_file)
+        pairs = quorum.conflicts(bullets)
+        tags = [(bullet_id, session, agent, f"verify:{sha}")]
+        meta = quorum.displace(meta, quorum.add_evidence(meta, tags, quorum.gates(meta, pairs)), pairs)
+        quorum.save(meta_file, meta)
+        quorum.write_report(Path(ace.VAULT) / "_meta" / "_conflicts.md", scope, pairs, meta,
+                            datetime.date.today().isoformat())
+    rec = meta[bullet_id]
+    kind = next((e["kind"] for e in reversed(rec["evidence"]) if e["session"] in (session, quorum.ANONYMOUS)), "")
+    note = "" if kind == "verify" else " (a verify needs a different agent and session than the lesson's author)"
+    return (f"verify: {bullet_id} counted as {kind}{note}; artifact sha256 {sha[:12]}; state {rec['state']}, "
+            f"score {quorum.score(rec)}")
+
+
+def tool_ratchet(*args):
+    """RATCHET-02 CLI fallback: `ratchet [scope]` drafts proposals; `ratchet accept <rule-id> [--target t]
+    [--glob g]` ships one (human step); `ratchet list` shows shipped rules."""
+    import argparse
+    import ledger
+    import ratchet
+    if args and args[0] == "accept":
+        p = argparse.ArgumentParser(prog="hive ratchet accept")
+        p.add_argument("rule_id")
+        p.add_argument("--target", choices=ratchet.TARGETS)
+        p.add_argument("--glob")
+        a = p.parse_args(args[1:])
+        try:
+            r = ratchet.accept(VAULT, a.rule_id, a.target, a.glob)
+        except ValueError as exc:
+            raise SystemExit(str(exc))
+        return (f"ratchet: shipped {r['id']}: {r['target']} files matching {r['glob']} must not contain "
+                f"`{r['pattern']}`; bullet {r['bullet']} is no longer injected")
+    if args and args[0] == "list":
+        rules = ratchet.load_rules(VAULT)
+        return "\n".join(f"{r['id']}  {r['target']}  {r['glob']}  `{r['pattern']}`" for r in rules) or \
+            "ratchet: no shipped rules"
+    release = bool(args) and args[0] == "release"  # RATCHET-03
+    rest = args[1:] if release else args
+    scopes = [validate_slug(rest[0])] if rest else ["global"] + sorted(
+        p.parent.name for p in (Path(VAULT) / "projects").glob("*/playbook.md"))
+    if release:
+        written = ratchet.propose_release(VAULT, scopes, ledger.read_ledger(LEDGER_PATH), ledger.resolve_agent(),
+                                          ledger.resolve_session())
+        if not written:
+            return (f"ratchet: no release candidates (canonical, never helpful, injected in >= "
+                    f"{ratchet.RELEASE_SESSIONS} sessions)")
+    else:
+        written = ratchet.propose(VAULT, scopes, ledger.resolve_agent(), ledger.resolve_session())
+        if not written:
+            return "ratchet: no new candidates (canonical lessons that ban a `backticked` token)"
+    return "\n".join(f"ratchet: proposal written to {p}" for p in written)
+
+
 def tool_handoff(*args):
     """HAND-01 CLI fallback: `handoff write <project> <record.json>` -> immutable handoff envelope."""
     import codex
@@ -1489,6 +1568,12 @@ def cmd_pre_commit(*args):
     print(rep)
     if "ERROR" in rep:
         sys.exit(1)
+    import ratchet
+    bad = ratchet.staged_violations(VAULT)  # RATCHET-02: shipped repo rules block staged files
+    for path, line, r in bad:
+        print(f"ERROR ratchet-violation {path}:{line}: `{r['pattern']}` is banned by {r['id']}")
+    if bad:
+        sys.exit(1)
     print("=== [2/2] Running Python tests ===")
     import subprocess
     res = subprocess.call([sys.executable, "-m", "unittest", "discover"])
@@ -1614,7 +1699,7 @@ def main(argv=None):
         "search": tool_search, "graph": tool_graph, "context": tool_context,
         "status": tool_status, "lint": tool_lint, "bench": bench, "eval": tool_eval,
         "ledger": tool_ledger, "skill": tool_skill, "pre-commit": cmd_pre_commit,
-        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex, "handoff": tool_handoff, "quarantine": tool_quarantine, "audit": tool_audit,
+        "mine": tool_mine, "curate": tool_curate, "trace": tool_trace, "codex": tool_codex, "handoff": tool_handoff, "ratchet": tool_ratchet, "verify": tool_verify, "quarantine": tool_quarantine, "audit": tool_audit,
     }
     if cmd not in commands:
         print(__doc__)

@@ -138,6 +138,24 @@ class DetailModeTest(unittest.TestCase):
 
 
 class OffloadTest(unittest.TestCase):
+    def test_excerpt_keeps_buried_signal_lines(self):
+        """Signal lines survive offload wherever they sit; bytes pinned = src/artifact.rs."""
+        import hashlib
+        import artifacts
+        lines = [f"2026-11-26T10:{i // 60:02d}:{i % 60:02d} INFO worker {i % 7} processed batch {i} ok"
+                 for i in range(1000)]
+        lines[66] = "2026-11-26T10:01:06 ERROR worker 3 retry budget exhausted for batch 66"
+        lines[899] = "2026-11-26T10:14:59 FATAL worker 1 panicked: index out of range in shard 899"
+        out = artifacts.excerpt("\n".join(lines), 400)
+        self.assertLessEqual(hive.est_tokens(out), 400)
+        self.assertTrue(out.startswith(lines[0]) and out.endswith(lines[-1]))
+        self.assertIn(f"L67: {lines[66]}", out)
+        self.assertIn(f"L900: {lines[899]}", out)
+        self.assertIn("lines omitted; 2 of 2 signal lines kept", out)
+        self.assertEqual(hashlib.sha256(out.encode()).hexdigest(),
+                         "882c9d9fec3044f42fe857c63f3361dda3ea11664cd3df8aa073a5edc3ed6397")
+        self.assertEqual(artifacts.excerpt("short\ntext", 400), "short\ntext")
+
     def test_small_text_unchanged_large_text_offloaded(self):
         import artifacts
         with Fixture() as fx:
@@ -150,7 +168,7 @@ class OffloadTest(unittest.TestCase):
             text = stored.read_text(encoding="utf-8")
             self.assertIn("[REDACTED_SECRET]", text)
             self.assertNotIn("abcdefghijklmnopqrstu", text)
-            self.assertIn(str(stored.resolve()), out)
+            self.assertIn(__import__("os").path.abspath(stored), out)
             old = Path(os.environ["HIVE_ARTIFACTS"]) / ("b" * 64 + ".md")
             old.write_text("old", encoding="utf-8")
             os.utime(old, (time.time() - 8 * 86400,) * 2)

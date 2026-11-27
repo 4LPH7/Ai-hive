@@ -132,19 +132,72 @@ pub fn offload_in(text: &str, folder: &Path, guard_roots: &[&Path]) -> String {
             return text.to_string();
         }
     };
-    let head = crate::packer::pack(
-        &[crate::packer::Section {
-            name: "output",
-            text: &scrubbed,
-            weight: 1.0,
-        }],
-        HEAD_TOKENS,
-    );
     format!(
-        "{head}\n[full output offloaded: {} (~{} tokens); disposable, purged after 7 days]",
+        "{}\n[full output offloaded: {} (~{} tokens); disposable, purged after 7 days]",
+        excerpt(&scrubbed, HEAD_TOKENS),
         std::path::absolute(&path).unwrap_or(path).display(),
         crate::common::est_tokens(&scrubbed)
     )
+}
+
+// Signal lines survive offload wherever they sit (idea adapted from Headroom's log compressor, own code): a
+// FATAL at line 900 of a 1,000-line output must not be cut because the inline excerpt keeps only the head.
+const SIGNAL_RE: &str =
+    r"(?i)\b(error|fatal|critical|panic(?:ked)?|traceback|exception|failed|failure)\b|\bFAIL\b";
+const HEAD_SHARE: f64 = 0.55;
+const TAIL_SHARE: f64 = 0.15; // the rest of the budget goes to signal lines
+
+fn line_cost(l: &str) -> usize {
+    l.chars().count() / 4 + 2
+}
+
+/// Leading lines whose est tokens (+1 per newline) fit the budget.
+fn take<S: AsRef<str>>(lines: &[S], budget: usize) -> Vec<String> {
+    let mut used = 0;
+    let mut out = Vec::new();
+    for l in lines {
+        let cost = line_cost(l.as_ref());
+        if used + cost > budget {
+            break;
+        }
+        used += cost;
+        out.push(l.as_ref().to_string());
+    }
+    out
+}
+
+/// Head + numbered signal lines + tail within ~budget est tokens; the whole text when it already fits.
+/// Byte-identical to `artifacts.excerpt` for the same input.
+pub fn excerpt(text: &str, budget: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.iter().map(|l| line_cost(l)).sum::<usize>() <= budget {
+        return text.to_string();
+    }
+    let head = take(&lines, (budget as f64 * HEAD_SHARE) as usize);
+    let rest_rev: Vec<&str> = lines[head.len()..].iter().rev().copied().collect();
+    let mut tail = take(&rest_rev, (budget as f64 * TAIL_SHARE) as usize);
+    tail.reverse();
+    let middle_end = lines.len() - tail.len();
+    let re = regex::Regex::new(SIGNAL_RE).unwrap();
+    let signals: Vec<String> = (head.len()..middle_end)
+        .filter(|&i| re.is_match(lines[i]))
+        .map(|i| format!("L{}: {}", i + 1, lines[i]))
+        .collect();
+    let used: usize = head.iter().chain(&tail).map(|l| line_cost(l)).sum();
+    let kept = take(&signals, budget.saturating_sub(used + 30));
+    let mut parts = head;
+    parts.push(format!(
+        "...[{} lines omitted; {} of {} signal lines kept]",
+        middle_end - parts.len(),
+        kept.len(),
+        signals.len()
+    ));
+    parts.extend(kept);
+    if !tail.is_empty() {
+        parts.push("...".into());
+        parts.extend(tail);
+    }
+    parts.join("\n")
 }
 
 #[cfg(test)]
@@ -198,6 +251,33 @@ mod tests {
             "the refused cache dir must not be created"
         );
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Signal lines survive offload wherever they sit; bytes pinned = artifacts.excerpt in Python.
+    #[test]
+    fn test_excerpt_keeps_buried_signal_lines_python_parity() {
+        let mut lines: Vec<String> = (0..1000)
+            .map(|i| {
+                format!(
+                    "2026-11-26T10:{:02}:{:02} INFO worker {} processed batch {i} ok",
+                    i / 60,
+                    i % 60,
+                    i % 7
+                )
+            })
+            .collect();
+        lines[66] = "2026-11-26T10:01:06 ERROR worker 3 retry budget exhausted for batch 66".into();
+        lines[899] =
+            "2026-11-26T10:14:59 FATAL worker 1 panicked: index out of range in shard 899".into();
+        let out = excerpt(&lines.join("\n"), 400);
+        assert!(crate::common::est_tokens(&out) <= 400);
+        assert!(out.contains(&format!("L67: {}", lines[66])));
+        assert!(out.contains(&format!("L900: {}", lines[899])));
+        assert_eq!(
+            crate::common::sha256(out.as_bytes()),
+            "882c9d9fec3044f42fe857c63f3361dda3ea11664cd3df8aa073a5edc3ed6397"
+        );
+        assert_eq!(excerpt("short\ntext", 400), "short\ntext");
     }
 
     #[test]

@@ -389,6 +389,9 @@ pub fn save(
 pub struct AddOp {
     pub section: String,
     pub content: String,
+    /// RATCHET-01: commit sha, error hash or session id the lesson came from
+    #[serde(default)]
+    pub failure_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -445,6 +448,7 @@ pub fn parse_delta(json_str: &str) -> Result<DeltaOps, String> {
             "ADD" => adds.push(AddOp {
                 section: field("section"),
                 content: field("content"),
+                failure_ref: Some(field("failure_ref")).filter(|r| !r.is_empty()),
             }),
             "TAG" => {
                 let num = |k: &str| op.get(k).and_then(|x| x.as_i64()).filter(|n| *n > 0);
@@ -478,16 +482,20 @@ pub fn apply(sections: &mut HashMap<String, Vec<Bullet>>, ops: &DeltaOps) -> Res
         ops,
         &std::collections::HashSet::new(),
         &mut Vec::new(),
+        &mut std::collections::BTreeMap::new(),
     )
 }
 
 /// `apply`, but new ids also skip `reserved` (retired ids from the quorum sidecar are never reissued), and
-/// ids an ADD reinforced as a near-duplicate are pushed to `reinforced` (QUOR-03 confirmations).
+/// ids an ADD reinforced as a near-duplicate are pushed to `reinforced` (QUOR-03 confirmations). `refs`
+/// gets each added id's validated failure_ref ("" when none) and each reinforced id's ref when one was given
+/// (RATCHET-01).
 pub fn apply_reserving(
     sections: &mut HashMap<String, Vec<Bullet>>,
     ops: &DeltaOps,
     reserved: &std::collections::HashSet<String>,
     reinforced: &mut Vec<String>,
+    refs: &mut std::collections::BTreeMap<String, String>,
 ) -> Result<usize, String> {
     let mut changed = 0usize;
 
@@ -570,6 +578,10 @@ pub fn apply_reserving(
             {
                 existing.seen += 1;
                 reinforced.push(existing.id.clone());
+                let r = crate::quorum::valid_failure_ref(a.failure_ref.as_deref().unwrap_or(""));
+                if !r.is_empty() {
+                    refs.insert(existing.id.clone(), r);
+                }
                 changed += 1;
                 continue;
             }
@@ -588,6 +600,10 @@ pub fn apply_reserving(
             }
             let new_id = format!("{}-{:05}", prefix, next_num);
             let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
+            refs.insert(
+                new_id.clone(),
+                crate::quorum::valid_failure_ref(a.failure_ref.as_deref().unwrap_or("")),
+            );
             bullets.push(Bullet {
                 id: new_id,
                 seen: 1,
@@ -648,7 +664,8 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
     let meta = crate::quorum::load(&meta_file);
     let reserved = meta.keys().cloned().collect();
     let mut reinforced = Vec::new();
-    let changed = apply_reserving(&mut sections, ops, &reserved, &mut reinforced)?;
+    let mut refs = std::collections::BTreeMap::new();
+    let changed = apply_reserving(&mut sections, ops, &reserved, &mut reinforced, &mut refs)?;
     save(vault, scope, &sections, None)?;
     // QUOR-01/PROV-04: state + origin sidecar, written under the same lock
     let after = ids(&sections);
@@ -695,7 +712,18 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
         added.sort();
         pruned.sort();
         let now = chrono::Utc::now().timestamp();
-        let base = crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent, now);
+        let base = crate::quorum::cite(
+            &crate::quorum::reconcile(&meta, &added, &pruned, &session, &agent, now),
+            &refs,
+            &added,
+        );
+        let unsourced: Vec<&String> = added
+            .iter()
+            .filter(|id| refs.get(*id).is_none_or(|r| r.is_empty()))
+            .collect();
+        if !unsourced.is_empty() {
+            eprintln!("ace: {unsourced:?} added without a valid failure_ref (commit sha, error hash or session id): weight 0 until a later ADD cites one");
+        }
         let gates = crate::quorum::gates(&base, &pairs);
         meta = crate::quorum::displace(
             &base,
@@ -714,15 +742,67 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
     Ok(changed)
 }
 
+/// QUOR-06: record a cross-agent verification of `bullet_id` backed by an artifact sha256. Counts as `verify`
+/// (1.5) only from a different agent and session than the lesson's author, else as the plain kind. Same lock,
+/// conflict gates and displacement as `apply_with_lock`. Returns the bullet's updated record. Mirror of
+/// `hive.tool_verify`.
+pub fn verify_with_lock(
+    vault: &Path,
+    scope: &str,
+    bullet_id: &str,
+    artifact_sha: &str,
+) -> Result<crate::quorum::Meta, String> {
+    let path = scope_path(vault, scope)?;
+    let _lock = PlaybookLock::acquire(&path, std::time::Duration::from_secs(30))?;
+    let sections = load(vault, scope)?;
+    let bullets: Vec<(String, String)> = sections
+        .values()
+        .flatten()
+        .map(|b| (b.id.clone(), b.content.clone()))
+        .collect();
+    if !bullets.iter().any(|(id, _)| id == bullet_id) {
+        return Err(format!("verify: no bullet {bullet_id} in {scope}"));
+    }
+    let meta_file = crate::quorum::meta_path(&path);
+    let meta = crate::quorum::load(&meta_file);
+    let pairs = crate::quorum::conflicts(&bullets);
+    let tag = crate::quorum::Tag {
+        id: bullet_id.to_string(),
+        session: crate::ledger::resolve_session(None),
+        agent: crate::ledger::resolve_agent(None),
+        hint: format!("verify:{artifact_sha}"),
+    };
+    let gates = crate::quorum::gates(&meta, &pairs);
+    let meta = crate::quorum::displace(
+        &meta,
+        &crate::quorum::add_evidence(&meta, &[tag], &gates),
+        &pairs,
+    );
+    crate::quorum::save(&meta_file, &meta)?;
+    crate::quorum::write_report(
+        &vault.join("_meta").join("_conflicts.md"),
+        &crate::common::slugify(scope),
+        &pairs,
+        &meta,
+        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+    )?;
+    meta.get(bullet_id)
+        .cloned()
+        .ok_or_else(|| format!("verify: {bullet_id} has no record"))
+}
+
 /// QUOR-03: the playbook as agents may see it: only bullets whose quorum state is injectable.
 pub fn load_injectable(vault: &Path, scope: &str) -> Result<HashMap<String, Vec<Bullet>>, String> {
     let mut sections = load(vault, scope)?;
     let meta = crate::quorum::load(&crate::quorum::meta_path(&scope_path(vault, scope)?));
     let rules = crate::governance::load_rules(vault); // GOV-02: quarantined bullets never injected
+    let shipped = crate::ratchet::load_rules(vault); // RATCHET-02: a shipped lint rule replaced the bullet
+    let slug = crate::common::slugify(scope);
     for bullets in sections.values_mut() {
         bullets.retain(|b| {
             crate::quorum::injectable(crate::quorum::state_of(&meta, &b.id))
                 && !crate::governance::bullet_hidden(&rules, meta.get(&b.id))
+                && !crate::ratchet::retired(&shipped, &slug, &b.id)
         });
     }
     Ok(sections)
@@ -806,6 +886,7 @@ mod tests {
             add: Some(vec![AddOp {
                 section: "strategies".to_string(),
                 content: "Always check memory before refactoring".to_string(),
+                failure_ref: None,
             }]),
             tag: None,
             remove: None,
@@ -820,6 +901,7 @@ mod tests {
             add: Some(vec![AddOp {
                 section: "strategies".to_string(),
                 content: "Always check memory before any refactoring".to_string(),
+                failure_ref: None,
             }]),
             tag: None,
             remove: None,

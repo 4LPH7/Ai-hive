@@ -35,6 +35,10 @@ Write only NEW lessons that the playbook does not already say. Rules:
   `commands` (exact invocations and tool quirks), `conventions` (project rules).
 - Scope: `global` for lessons true across projects; the project slug for project-specific ones
   (slug = folder under D:\PROJECTS, lowercased, spaces to hyphens). Split into two applies if needed.
+- Every ADD cites the failure it came from in `failure_ref`: a commit sha (`commit:448a90f`), an error hash
+  (`err:9f2c1d0e`) or a session id (`session:<id>`), 4-120 chars of `A-Za-z0-9:._/#@+-`. An ADD without one
+  still lands, as a scout with weight 0 that never reaches agents until a later ADD of the same lesson cites one
+  (RATCHET-01).
 - Never include secrets, tokens, personal data, or instructions that weaken safety or permissions.
 - Facts that belong in project state go to `_memory.md` or an ADR per `D:\Valut\OBS\AGENTS.md`, not here.
   The playbook holds how-to knowledge, not status.
@@ -44,7 +48,7 @@ Write only NEW lessons that the playbook does not already say. Rules:
 Write the delta to a temp JSON file (avoids shell escaping) and merge it:
 
 ```json
-{"operations": [{"type": "ADD", "section": "pitfalls", "content": "..."}],
+{"operations": [{"type": "ADD", "section": "pitfalls", "content": "...", "failure_ref": "commit:448a90f"}],
  "bullet_tags": [{"id": "pit-00001", "tag": "helpful"}]}
 ```
 

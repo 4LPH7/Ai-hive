@@ -11,7 +11,33 @@ pub const STATES: [&str; 4] = ["scout", "quorum", "canonical", "retired"];
 pub const DEFAULT_STATE: &str = "canonical";
 
 /// QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0).
-pub const WEIGHTS: [(&str, f64); 3] = [("test_pass", 1.0), ("confirm", 1.0), ("self_tag", 0.35)];
+/// QUOR-06: `verify` = a different agent in a different session checked the lesson and left an evidence
+/// artifact (recorded as its sha256); without both it never counts.
+pub const WEIGHTS: [(&str, f64); 4] = [
+    ("verify", 1.5),
+    ("test_pass", 1.0),
+    ("confirm", 1.0),
+    ("self_tag", 0.35),
+];
+
+/// Mirror of `quorum._valid_evidence`: a verify needs a sha256 artifact, a session other than the origin's
+/// (and not anonymous) and an agent other than the origin's.
+fn valid_evidence(e: &Evidence, origin_session: &str, origin_agent: &str) -> bool {
+    if weight(&e.kind).is_none() || e.session.is_empty() {
+        return false;
+    }
+    if e.kind != "verify" {
+        return true;
+    }
+    let sha_ok = e.artifact.as_deref().is_some_and(|a| {
+        a.len() == 64 && a.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+    });
+    sha_ok
+        && e.session != origin_session
+        && e.session != ANONYMOUS
+        && !e.agent.is_empty()
+        && e.agent != origin_agent
+}
 
 /// QUOR-03: canonical at score >= PROMOTE_SCORE from >= PROMOTE_SESSIONS sessions; >= 2 sessions below it = quorum.
 pub const PROMOTE_SCORE: f64 = 1.5;
@@ -22,7 +48,10 @@ pub const ANONYMOUS: &str = "anonymous";
 /// scout -> quorum (>= 2 sessions) -> canonical (and score >= gate: 1.5 unless a QUOR-04 conflict raises it).
 /// Never demotes here; retired and canonical stay.
 pub fn promote(rec: &mut Meta, gate: f64) {
-    if !matches!(rec.state.as_str(), "scout" | "quorum") || sessions(rec).len() < PROMOTE_SESSIONS {
+    if !matches!(rec.state.as_str(), "scout" | "quorum")
+        || sessions(rec).len() < PROMOTE_SESSIONS
+        || unsourced(rec)
+    {
         return;
     }
     rec.state = if score(rec) >= gate {
@@ -55,6 +84,9 @@ pub struct Evidence {
     #[serde(default)]
     pub agent: String,
     pub kind: String,
+    /// QUOR-06: sha256 of the verification artifact; only on `verify` evidence
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
 }
 
 /// Field order is the wire order: byte-identical to `quorum.dumps`.
@@ -69,6 +101,9 @@ pub struct Meta {
     /// GOV-01: when the bullet was proposed (0 = unknown / legacy), so --agent --since rules can match it
     #[serde(default)]
     pub origin_ts: i64,
+    /// RATCHET-01: None on legacy records (no restriction), "" on an unsourced scout (weight 0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_ref: Option<String>,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
 }
@@ -81,6 +116,7 @@ impl Meta {
             origin_session: String::new(),
             origin_agent: String::new(),
             origin_ts: 0,
+            failure_ref: None,
             evidence: Vec::new(),
         }
     }
@@ -111,8 +147,8 @@ pub fn load(path: &Path) -> MetaMap {
         .filter_map(|l| serde_json::from_str::<Meta>(l).ok())
         .filter(|m| STATES.contains(&m.state.as_str()))
         .map(|mut m| {
-            m.evidence
-                .retain(|e| weight(&e.kind).is_some() && !e.session.is_empty());
+            let (os, oa) = (m.origin_session.clone(), m.origin_agent.clone());
+            m.evidence.retain(|e| valid_evidence(e, &os, &oa));
             (m.id.clone(), m)
         })
         .collect()
@@ -154,6 +190,7 @@ pub fn reconcile(
                 origin_session: session.into(),
                 origin_agent: agent.into(),
                 origin_ts: now,
+                failure_ref: None,
                 evidence: Vec::new(),
             },
         );
@@ -191,16 +228,30 @@ pub fn add_evidence(meta: &MetaMap, tags: &[Tag], gates: &BTreeMap<String, f64>)
         } else {
             "confirm"
         };
+        let mut entry = Evidence {
+            session: session.clone(),
+            agent: t.agent.clone(),
+            kind: kind.into(),
+            artifact: None,
+        };
+        // QUOR-06: a `verify:<sha256>` hint (set only by `hive verify`) counts as verify when valid,
+        // otherwise as the plain kind above
+        if let Some(sha) = t.hint.strip_prefix("verify:") {
+            let candidate = Evidence {
+                kind: "verify".into(),
+                artifact: Some(sha.to_string()),
+                ..entry.clone()
+            };
+            if valid_evidence(&candidate, &rec.origin_session, &rec.origin_agent) {
+                entry = candidate;
+            }
+        }
         if !rec
             .evidence
             .iter()
-            .any(|e| e.session == session && e.kind == kind)
+            .any(|e| e.session == session && e.kind == entry.kind)
         {
-            rec.evidence.push(Evidence {
-                session: session.clone(),
-                agent: t.agent.clone(),
-                kind: kind.into(),
-            });
+            rec.evidence.push(entry);
         }
         promote(rec, *gates.get(&t.id).unwrap_or(&PROMOTE_SCORE));
     }
@@ -211,8 +262,11 @@ pub fn sessions(rec: &Meta) -> std::collections::BTreeSet<String> {
     rec.evidence.iter().map(|e| e.session.clone()).collect()
 }
 
-/// Sum over sessions of each session's strongest evidence weight.
+/// Sum over sessions of each session's strongest evidence weight; 0 for an unsourced scout (RATCHET-01).
 pub fn score(rec: &Meta) -> f64 {
+    if unsourced(rec) {
+        return 0.0;
+    }
     let mut best: BTreeMap<&str, f64> = BTreeMap::new();
     for e in &rec.evidence {
         if let Some(w) = weight(&e.kind) {
@@ -401,6 +455,49 @@ pub fn write_report(
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------- RATCHET-01 failure refs
+// A lesson must cite the failure it came from: a commit sha, an error hash or a session id. An ADD without a
+// valid ref still lands, as a scout with weight 0 that never promotes, until a later ADD of the same lesson
+// cites one. Records written before RATCHET-01 have no failure_ref key and keep their old behaviour.
+
+/// The ref when it is a plausible pointer (4-120 safe chars, no secret), else "". Mirror of quorum.py.
+pub fn valid_failure_ref(raw: &str) -> String {
+    let r = raw.trim();
+    let safe = |c: char| c.is_ascii_alphanumeric() || ":._/#@+-".contains(c);
+    let ok = (4..=120).contains(&r.chars().count())
+        && r.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && r.chars().all(safe)
+        && !crate::ace::is_secret(r);
+    if ok {
+        r.to_string()
+    } else {
+        String::new()
+    }
+}
+
+pub fn unsourced(rec: &Meta) -> bool {
+    rec.failure_ref.as_deref() == Some("")
+}
+
+/// New scouts get their failure_ref ("" when none); an existing unsourced bullet gains a ref when the same
+/// lesson is proposed again with one.
+pub fn cite(meta: &MetaMap, refs: &BTreeMap<String, String>, added: &[String]) -> MetaMap {
+    let mut out = meta.clone();
+    for id in added {
+        if let Some(m) = out.get_mut(id) {
+            m.failure_ref = Some(refs.get(id).cloned().unwrap_or_default());
+        }
+    }
+    for (id, r) in refs {
+        if !r.is_empty() && !added.contains(id) {
+            if let Some(m) = out.get_mut(id).filter(|m| unsourced(m)) {
+                m.failure_ref = Some(r.clone());
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +510,7 @@ mod tests {
             origin_session: "s".into(),
             origin_agent: "a".into(),
             origin_ts: 0,
+            failure_ref: None,
             evidence: Vec::new(),
         };
         assert_eq!(
@@ -423,6 +521,7 @@ mod tests {
             session: "s2".into(),
             agent: "codex".into(),
             kind: "confirm".into(),
+            artifact: None,
         });
         assert!(serde_json::to_string(&m)
             .unwrap()
@@ -627,5 +726,69 @@ mod tests {
             Path::new("x/playbook.meta.jsonl")
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RATCHET-01 parity with tests/python/test_ratchet.py.
+    #[test]
+    fn test_failure_ref_validation() {
+        for r in [
+            "a4fc6c4",
+            "commit:448a90f",
+            "err:9f2c1d0e",
+            "session:0c76ddc1-d32c",
+            "PR#8",
+        ] {
+            assert_eq!(valid_failure_ref(r), r);
+        }
+        let long = "x".repeat(121);
+        for r in [
+            "",
+            "abc",
+            "has space here",
+            long.as_str(),
+            "token: abcdefghijklmnop",
+            "-leading",
+        ] {
+            assert_eq!(valid_failure_ref(r), "", "{r}");
+        }
+    }
+
+    #[test]
+    fn test_unsourced_scout_has_weight_zero_until_cited() {
+        let ev = |s: &str, k: &str| Evidence {
+            session: s.into(),
+            agent: "a".into(),
+            kind: k.into(),
+            artifact: None,
+        };
+        let added = vec!["pit-00001".to_string()];
+        let meta = reconcile(&MetaMap::new(), &added, &[], "sess-a", "claude", 0);
+        let mut meta = cite(&meta, &BTreeMap::new(), &added);
+        let rec = meta.get_mut("pit-00001").unwrap();
+        assert_eq!(rec.failure_ref.as_deref(), Some(""));
+        rec.evidence = vec![ev("sess-a", "test_pass"), ev("sess-b", "test_pass")];
+        assert_eq!(score(rec), 0.0);
+        promote(rec, PROMOTE_SCORE);
+        assert_eq!(rec.state, "scout", "an unsourced lesson never promotes");
+        let refs = BTreeMap::from([("pit-00001".to_string(), "commit:448a90f".to_string())]);
+        let mut cited = cite(&meta, &refs, &[]);
+        let rec = cited.get_mut("pit-00001").unwrap();
+        assert_eq!(rec.failure_ref.as_deref(), Some("commit:448a90f"));
+        promote(rec, PROMOTE_SCORE);
+        assert_eq!(rec.state, "canonical");
+    }
+
+    #[test]
+    fn test_legacy_records_keep_old_bytes_and_behaviour() {
+        let legacy = r#"{"id":"pit-00001","state":"scout","origin_session":"s","origin_agent":"a","origin_ts":0,"evidence":[{"session":"s1","agent":"a","kind":"test_pass"},{"session":"s2","agent":"a","kind":"confirm"}]}"#;
+        let mut m: Meta = serde_json::from_str(legacy).unwrap();
+        assert_eq!(serde_json::to_string(&m).unwrap(), legacy);
+        m.failure_ref = Some("a4fc6c4".into());
+        assert!(serde_json::to_string(&m)
+            .unwrap()
+            .contains(r#""origin_ts":0,"failure_ref":"a4fc6c4","evidence""#));
+        m.failure_ref = None;
+        promote(&mut m, PROMOTE_SCORE);
+        assert_eq!(m.state, "canonical");
     }
 }

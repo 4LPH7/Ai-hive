@@ -161,6 +161,36 @@ enum Commands {
         #[command(subcommand)]
         cmd: CodexCommands,
     },
+    /// QUOR-06: record a cross-agent verification of a lesson, backed by an artifact file
+    Verify {
+        scope: String,
+        bullet_id: String,
+        artifact: PathBuf,
+    },
+    /// RATCHET-02: draft lint rules from canonical lessons that ban a `token`; accept ships one
+    #[command(args_conflicts_with_subcommands = true)]
+    Ratchet {
+        #[command(subcommand)]
+        cmd: Option<RatchetCommands>,
+        /// Playbook scope to scan (default: global and every project playbook)
+        scope: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RatchetCommands {
+    /// Ship a proposed rule (human step): appends it to _meta/ratchet_rules.jsonl
+    Accept {
+        rule_id: String,
+        #[arg(long, value_parser = ["vault", "repo"])]
+        target: Option<String>,
+        #[arg(long)]
+        glob: Option<String>,
+    },
+    /// List shipped rules
+    List,
+    /// RATCHET-03: propose retiring canonical lessons injected in >= 20 sessions and never tagged helpful
+    Release { scope: Option<String> },
 }
 
 #[derive(Subcommand, Debug)]
@@ -221,6 +251,26 @@ enum AceCommands {
         #[arg(long)]
         diff: bool,
     },
+}
+
+/// Ratchet scopes: the given one, else `global` plus every project with a playbook (sorted).
+fn ratchet_scopes(
+    vault: &std::path::Path,
+    scope: Option<String>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    if let Some(s) = scope {
+        return Ok(vec![ai_hive::common::validate_slug(&s)?]);
+    }
+    let mut v: Vec<String> = fs::read_dir(vault.join("projects"))
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .filter(|e| e.path().join("playbook.md").is_file())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    Ok(std::iter::once("global".to_string()).chain(v).collect())
 }
 
 /// Write a codex or handoff note, its DEAD_END traces and any GOV-04 proposals.
@@ -429,6 +479,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", format_report(&findings));
                 if findings.iter().any(|f| f.severity == "ERROR") {
                     eprintln!("pre-commit: lint failed with errors");
+                    std::process::exit(1);
+                }
+                // RATCHET-02: shipped repo rules block staged files
+                let bad =
+                    ai_hive::ratchet::staged_violations(&cfg.vault, std::path::Path::new("."));
+                for (path, line, r) in &bad {
+                    println!(
+                        "ERROR ratchet-violation {path}:{line}: `{}` is banned by {}",
+                        r.pattern, r.id
+                    );
+                }
+                if !bad.is_empty() {
                     std::process::exit(1);
                 }
 
@@ -658,6 +720,101 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  proposal written to: {}", p.display());
                 }
             }
+            Commands::Verify {
+                scope,
+                bullet_id,
+                artifact,
+            } => {
+                let scope = ai_hive::common::validate_slug(&scope)?;
+                let data = fs::read(&artifact)
+                    .map_err(|e| format!("verify: cannot read artifact: {e}"))?;
+                if data.iter().all(|b| b.is_ascii_whitespace()) {
+                    return Err("verify: artifact is empty".into());
+                }
+                let sha = ai_hive::common::sha256(&data);
+                let session = ai_hive::ledger::resolve_session(None);
+                let rec = ai_hive::ace::verify_with_lock(&cfg.vault, &scope, &bullet_id, &sha)?;
+                let kind = rec
+                    .evidence
+                    .iter()
+                    .rev()
+                    .find(|e| e.session == session || e.session == ai_hive::quorum::ANONYMOUS)
+                    .map(|e| e.kind.clone())
+                    .unwrap_or_default();
+                let note = if kind == "verify" {
+                    ""
+                } else {
+                    " (a verify needs a different agent and session than the lesson's author)"
+                };
+                println!(
+                    "verify: {bullet_id} counted as {kind}{note}; artifact sha256 {}; state {}, score {}",
+                    &sha[..12],
+                    rec.state,
+                    ai_hive::quorum::score(&rec)
+                );
+            }
+            Commands::Ratchet { cmd, scope } => match cmd {
+                Some(RatchetCommands::Accept {
+                    rule_id,
+                    target,
+                    glob,
+                }) => {
+                    let r = ai_hive::ratchet::accept(
+                        &cfg.vault,
+                        &rule_id,
+                        target.as_deref(),
+                        glob.as_deref(),
+                    )?;
+                    println!(
+                        "ratchet: shipped {}: {} files matching {} must not contain `{}`; bullet {} is no longer injected",
+                        r.id, r.target, r.glob, r.pattern, r.bullet
+                    );
+                }
+                Some(RatchetCommands::List) => {
+                    let rules = ai_hive::ratchet::load_rules(&cfg.vault);
+                    if rules.is_empty() {
+                        println!("ratchet: no shipped rules");
+                    }
+                    for r in rules {
+                        println!("{}  {}  {}  `{}`", r.id, r.target, r.glob, r.pattern);
+                    }
+                }
+                Some(RatchetCommands::Release { scope }) => {
+                    let written = ai_hive::ratchet::propose_release(
+                        &cfg.vault,
+                        &ratchet_scopes(&cfg.vault, scope)?,
+                        &ai_hive::ledger::read_ledger(&cfg.ledger, None, None),
+                        &ai_hive::ledger::resolve_agent(None),
+                        &ai_hive::ledger::resolve_session(None),
+                        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+                    )?;
+                    if written.is_empty() {
+                        println!(
+                            "ratchet: no release candidates (canonical, never helpful, injected in >= {} sessions)",
+                            ai_hive::ratchet::RELEASE_SESSIONS
+                        );
+                    }
+                    for p in written {
+                        println!("ratchet: proposal written to {}", p.display());
+                    }
+                }
+                None => {
+                    let scopes = ratchet_scopes(&cfg.vault, scope)?;
+                    let written = ai_hive::ratchet::propose(
+                        &cfg.vault,
+                        &scopes,
+                        &ai_hive::ledger::resolve_agent(None),
+                        &ai_hive::ledger::resolve_session(None),
+                        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+                    )?;
+                    if written.is_empty() {
+                        println!("ratchet: no new candidates (canonical lessons that ban a `backticked` token)");
+                    }
+                    for p in written {
+                        println!("ratchet: proposal written to {}", p.display());
+                    }
+                }
+            },
             Commands::Handoff {
                 cmd:
                     CodexCommands::Write {

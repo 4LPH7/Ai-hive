@@ -5,6 +5,44 @@ All notable changes to `ai-hive` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - v2.8.0 (Phase 8 addendum)
+
+### Added
+- **RATCHET-01 failure refs (`quorum.py`, `src/quorum.rs`, `ace.py`, `src/ace.rs`)**: every ACE ADD may carry
+  `failure_ref` (commit sha, error hash or session id; 4-120 safe chars, secret-checked). A new bullet without a
+  valid ref lands as a scout with weight 0 that never promotes until a later ADD of the same lesson cites one.
+  Sidecar records written before 2.8.0 carry no `failure_ref` key and keep their old bytes and behaviour.
+  `ace apply` reports `unsourced` ids; the `hive-ace` skill documents the field.
+- **MCP-02 schema budget**: Python and Rust tests cap the six MCP tool schemas at 1,140 est tokens (1,037
+  measured at v2.7.2 + 10%), so tool descriptions cannot creep into context confusion. MCP-01 (≤ 6 tools) holds.
+- **RATCHET-02 `hive ratchet` (`ratchet.py`, `src/ratchet.rs`)**: drafts `inbox/ratchet-<rule-id>.md` for each
+  canonical lesson that bans a `backticked` token; `hive ratchet accept <rule-id> [--target vault|repo]
+  [--glob G]` (a human step) ships it to `_meta/ratchet_rules.jsonl`. Vault rules are `ratchet-violation`
+  ERRORs in `hive lint`; repo rules block staged files in `hive pre-commit`; the source bullet stops being
+  injected (`ace.select`, `load_injectable`). Patterns are literal substrings; globs support `*` and `?` only,
+  with identical semantics in both languages. Phase 8 gate covered by Python and Rust end-to-end tests.
+- **RATCHET-03 `hive ratchet release [scope]`**: proposes retiring (`inbox/retire-<scope>-<id>.md`) canonical
+  lessons injected into >= 20 distinct real sessions (from `context` ledger events; per-process ids ignored)
+  that were never tagged helpful and have no shipped rule. A proposal only: the human applies
+  `{"remove": [id]}` with `hive ace apply`.
+- **QUOR-06 `hive verify <scope> <bullet-id> <artifact-file>`**: cross-agent verification weighs 1.5 (above
+  test pass 1.0) only from a different agent and session than the lesson's author, with an evidence artifact
+  stored as its sha256. Otherwise it counts as a plain confirm or self-tag. Verify evidence without a valid
+  artifact, or from the author's agent or session, is dropped when the sidecar loads. A verify plus the
+  author's self-tag (1.85) reaches canonical; a plain confirm plus self-tag (1.35) stays quorum.
+
+### Fixed
+- **`est_tokens` parity**: the Rust estimator counted UTF-8 bytes and a newline after every line, including a
+  final line without one; it now counts characters and real line endings like `hive.est_tokens`, so budgets,
+  packing and gates agree across languages (pinned on 14 cases incl. CRLF and non-ASCII).
+
+### Changed
+- **Signal-preserving offload excerpt (`artifacts.excerpt`, `artifact::excerpt`)**: an offloaded result's inline
+  excerpt keeps the head (55% of 400 tokens), the tail (15%) and every error/fatal/panic/traceback/exception/
+  failed line in between, numbered `L<n>:`, instead of only the head. A FATAL at line 900 of a 1,000-line output
+  now survives. Byte-identical in both languages (pinned). Approach adapted from Headroom's log compressor
+  (headroomlabs-ai/headroom); the code is our own. The offload pointer now prints `os.path.abspath`, matching
+  Rust.
 ## [2.7.2] - 2026-11-26
 
 ### Security
