@@ -117,13 +117,20 @@ pub fn open_db(path: &Path) -> Result<(Connection, PathBuf), String> {
             path.display()
         );
         if !move_aside(path) {
-            target = PathBuf::from(format!("{}{RECOVERED_SUFFIX}", path.display()));
-            if !healthy(&target) && !move_aside(&target) {
-                return Err(format!(
-                    "{} and {} are corrupt and locked",
-                    path.display(),
-                    target.display()
-                ));
+            // The index is disposable: drop the file that cannot be renamed and rebuild it from the vault.
+            let _ = fs::remove_file(path);
+            for side in ["-wal", "-shm"] {
+                let _ = fs::remove_file(format!("{}{side}", path.display()));
+            }
+            if path.exists() {
+                target = PathBuf::from(format!("{}{RECOVERED_SUFFIX}", path.display()));
+                if !healthy(&target) && !move_aside(&target) {
+                    return Err(format!(
+                        "{} and {} are corrupt and locked",
+                        path.display(),
+                        target.display()
+                    ));
+                }
             }
         }
     }

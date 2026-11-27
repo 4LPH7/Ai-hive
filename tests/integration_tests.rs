@@ -1300,3 +1300,16 @@ fn test_config_ledger_override_reaches_mcp_records() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_corrupt_index_is_rebuilt_in_place() {
+    let tmp = std::env::temp_dir().join(format!("hive_corrupt_idx_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let db = tmp.join("hive.sqlite");
+    std::fs::write(&db, b"not a sqlite database, just garbage bytes").unwrap();
+    let (conn, used) = ai_hive::index::open_db(&db).unwrap();
+    assert_eq!(used, db);
+    assert!(!tmp.join("hive.sqlite.recovered").exists());
+    drop(conn);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
