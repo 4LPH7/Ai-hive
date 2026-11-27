@@ -245,9 +245,17 @@ pub fn coverage(entries: &[LedgerEntry]) -> Coverage {
     c
 }
 
+/// Appends one entry. Returns true only when the line reached the file: every step's error is reported on
+/// stderr and makes the call false, so a lost record is never reported as written.
 fn append_entry(ledger_path: &Path, entry: &LedgerEntry) -> bool {
     if let Some(parent) = ledger_path.parent() {
-        let _ = fs::create_dir_all(parent);
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!(
+                "hive ledger: warning: cannot create {}: {e}",
+                parent.display()
+            );
+            return false;
+        }
     }
     let json_line = match serde_json::to_string(entry) {
         Ok(s) => s + "\n",
@@ -260,8 +268,13 @@ fn append_entry(ledger_path: &Path, entry: &LedgerEntry) -> bool {
         .open(ledger_path)
     {
         Ok(mut f) => {
-            let _ = f.write_all(json_line.as_bytes());
-            let _ = f.flush();
+            if let Err(e) = f.write_all(json_line.as_bytes()).and_then(|_| f.flush()) {
+                eprintln!(
+                    "hive ledger: warning: failed to write {}: {e}",
+                    ledger_path.display()
+                );
+                return false;
+            }
             true
         }
         Err(e) => {
