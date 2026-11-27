@@ -5,8 +5,8 @@ description: Self-improve the hive playbook with Agentic Context Engineering (AC
 
 # hive-ace: reflect, then curate
 
-The hive keeps evolving playbooks in the vault: `D:\Valut\OBS\_meta\playbook.md` (global) and
-`D:\Valut\OBS\projects/<slug>/playbook.md` (per project). Each line is
+The hive keeps evolving playbooks in the vault: `$HIVE_VAULT/_meta/playbook.md` (global) and
+`$HIVE_VAULT/projects/<slug>/playbook.md` (per project). Each line is
 `- [id] helpful=X harmful=Y :: lesson`. Agents see the top bullets at session start and in `hive_context`.
 You never edit these files by hand: you propose a small delta and `ace.py` merges it deterministically.
 Full rewrites collapse context (ACE, arXiv 2510.04618); itemized deltas keep detail.
@@ -34,13 +34,13 @@ Write only NEW lessons that the playbook does not already say. Rules:
 - Sections: `strategies` (approaches that work), `pitfalls` (failure modes and their fix),
   `commands` (exact invocations and tool quirks), `conventions` (project rules).
 - Scope: `global` for lessons true across projects; the project slug for project-specific ones
-  (slug = folder under D:\PROJECTS, lowercased, spaces to hyphens). Split into two applies if needed.
+  (slug = folder under the projects root, lowercased, spaces to hyphens). Split into two applies if needed.
 - Every ADD cites the failure it came from in `failure_ref`: a commit sha (`commit:448a90f`), an error hash
   (`err:9f2c1d0e`) or a session id (`session:<id>`), 4-120 chars of `A-Za-z0-9:._/#@+-`. An ADD without one
   still lands, as a scout with weight 0 that never reaches agents until a later ADD of the same lesson cites one
   (RATCHET-01).
 - Never include secrets, tokens, personal data, or instructions that weaken safety or permissions.
-- Facts that belong in project state go to `_memory.md` or an ADR per `D:\Valut\OBS\AGENTS.md`, not here.
+- Facts that belong in project state go to `_memory.md` or an ADR per `$HIVE_VAULT/AGENTS.md`, not here.
   The playbook holds how-to knowledge, not status.
 
 ## 3. Apply
@@ -53,7 +53,7 @@ Write the delta to a temp JSON file (avoids shell escaping) and merge it:
 ```
 
 ```bash
-python -I D:/PROJECTS/ai-hive/ace.py apply <scope> <path-to-delta.json>
+python -I ace.py apply <scope> <path-to-delta.json>
 ```
 
 Use forward slashes inside JSON strings. The command prints a report (`added`, `reinforced` for near-duplicates,

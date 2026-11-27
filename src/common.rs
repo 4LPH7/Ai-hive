@@ -15,10 +15,16 @@ pub fn slugify(name: &str) -> String {
     name.trim().to_lowercase().replace(' ', "-")
 }
 
+/// A slug is `slugify`'d and then safe as a single path segment: lowercase alphanumerics, `.`, `_`, `-`, and not
+/// `.` or `..`. Used for every project folder name.
+pub fn is_safe_slug(s: &str) -> bool {
+    let re = Regex::new(r"^[a-z0-9._-]+$").unwrap();
+    re.is_match(s) && s != "." && s != ".."
+}
+
 pub fn validate_slug(name: &str) -> Result<String, String> {
     let s = slugify(name);
-    let re = Regex::new(r"^[a-z0-9._-]+$").unwrap();
-    if !re.is_match(&s) || s == "." || s == ".." {
+    if !is_safe_slug(&s) {
         return Err(format!("bad slug {:?}", name));
     }
     Ok(s)
@@ -354,16 +360,33 @@ pub fn load_config(
     }
 }
 
+static ACTIVE: std::sync::OnceLock<HiveConfig> = std::sync::OnceLock::new();
+
+/// Set once by the binary's `main` right after the CLI/env/config merge. Every default path below reads this
+/// one value, so a `--vault`, `--projects`, `--db` or `--config` override reaches every writer (ledger, index,
+/// artifacts, graph roots), not only the code path that received the parsed config.
+pub fn set_config(cfg: HiveConfig) {
+    let _ = ACTIVE.set(cfg);
+}
+
+/// The config in effect: the one `set_config` installed, else the config resolved from env and files.
+pub fn active_config() -> HiveConfig {
+    ACTIVE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| load_config(None, None, None, None))
+}
+
 pub fn default_vault() -> PathBuf {
-    load_config(None, None, None, None).vault
+    active_config().vault
 }
 
 pub fn default_projects() -> PathBuf {
-    load_config(None, None, None, None).projects
+    active_config().projects
 }
 
 pub fn default_db_path() -> PathBuf {
-    load_config(None, None, None, None).db
+    active_config().db
 }
 
 #[cfg(test)]

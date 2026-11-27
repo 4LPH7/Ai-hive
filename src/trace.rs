@@ -71,7 +71,7 @@ pub fn add(
     if summary.chars().count() > MAX_SUMMARY_CHARS {
         return Err(format!("summary over {MAX_SUMMARY_CHARS} characters"));
     }
-    if crate::ace::is_secret(&summary) || crate::ace::is_secret(target) {
+    if crate::secrets::is_secret(&summary) || crate::secrets::is_secret(target) {
         return Err("trace looks like it contains a secret; not stored".into());
     }
     ensure_table(conn)?;

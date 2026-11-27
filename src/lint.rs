@@ -1,5 +1,5 @@
-use crate::ace::is_secret;
 use crate::index::{parse_note, SKIP_DIRS};
+use crate::secrets::is_secret;
 use chrono::NaiveDate;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};

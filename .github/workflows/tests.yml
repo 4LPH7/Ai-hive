@@ -11,53 +11,6 @@ env:
   TESTCACHE_FORCE: ""
 
 jobs:
-  unittest-arch:
-    name: unittest (archlinux)
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:base-devel
-    steps:
-      - name: Update pacman keyring and install dependencies
-        run: |
-          pacman -Sy --noconfirm archlinux-keyring
-          pacman -Syu --noconfirm --needed git python python-pip python-setuptools
-      - uses: actions/checkout@v4
-      - name: Configure safe directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: actions/cache@v4
-        with:
-          path: .git/hive-testcache.json
-          key: testcache-${{ github.job }}-${{ github.sha }}
-      - name: Run tests (stdlib only, no model downloads)
-        run: python scripts/testcache.py run $TESTCACHE_FORCE -- python -W error::SyntaxWarning -m unittest -v
-      - name: Packaging smoke test
-        run: |
-          pip install --no-build-isolation --no-deps --break-system-packages .
-          python -m hive --version
-
-  unittest-windows:
-    name: unittest (windows, ${{ matrix.python }})
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.10", "3.12"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - uses: actions/cache@v4
-        with:
-          path: .git/hive-testcache.json
-          key: testcache-${{ github.job }}-${{ matrix.python }}-${{ github.sha }}
-      - name: Run tests (stdlib only, no model downloads)
-        run: python scripts/testcache.py run $env:TESTCACHE_FORCE -- python -W error::SyntaxWarning -m unittest -v
-      - name: Packaging smoke test
-        run: |
-          pip install --no-build-isolation --no-deps .
-          python -m hive --version
-
   rust-arch:
     name: rust (archlinux)
     runs-on: ubuntu-latest
@@ -79,6 +32,10 @@ jobs:
         run: python scripts/testcache.py run $TESTCACHE_FORCE -- cargo test --verbose
       - name: Build release binary
         run: cargo build --release
+      - name: Launcher smoke test (Python entry points run the binary)
+        run: |
+          python -I hive.py --version
+          python -I ace.py hook-stop < /dev/null
 
   rust-windows:
     name: rust (windows)
@@ -98,5 +55,10 @@ jobs:
         run: python scripts/testcache.py run $env:TESTCACHE_FORCE -- cargo clippy --all-targets -- -D warnings
       - name: Run Rust unit and integration tests
         run: python scripts/testcache.py run $env:TESTCACHE_FORCE -- cargo test --verbose
+      - name: Build release binary
+        run: cargo build --release
+      - name: Launcher smoke test
+        shell: bash
+        run: python -I hive.py --version
       - name: Build release binary
         run: cargo build --release

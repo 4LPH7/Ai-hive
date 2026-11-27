@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub fn default_ledger_path() -> PathBuf {
-    crate::common::load_config(None, None, None, None).ledger
+    crate::common::active_config().ledger
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -245,9 +245,17 @@ pub fn coverage(entries: &[LedgerEntry]) -> Coverage {
     c
 }
 
+/// Appends one entry. Returns true only when the line reached the file: every step's error is reported on
+/// stderr and makes the call false, so a lost record is never reported as written.
 fn append_entry(ledger_path: &Path, entry: &LedgerEntry) -> bool {
     if let Some(parent) = ledger_path.parent() {
-        let _ = fs::create_dir_all(parent);
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!(
+                "hive ledger: warning: cannot create {}: {e}",
+                parent.display()
+            );
+            return false;
+        }
     }
     let json_line = match serde_json::to_string(entry) {
         Ok(s) => s + "\n",
@@ -260,8 +268,13 @@ fn append_entry(ledger_path: &Path, entry: &LedgerEntry) -> bool {
         .open(ledger_path)
     {
         Ok(mut f) => {
-            let _ = f.write_all(json_line.as_bytes());
-            let _ = f.flush();
+            if let Err(e) = f.write_all(json_line.as_bytes()).and_then(|_| f.flush()) {
+                eprintln!(
+                    "hive ledger: warning: failed to write {}: {e}",
+                    ledger_path.display()
+                );
+                return false;
+            }
             true
         }
         Err(e) => {
@@ -308,169 +321,6 @@ pub fn read_ledger(
         }
     }
     entries
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScoredSessionResult {
-    pub session_id: String,
-    pub scored: bool,
-    pub reward: i64,
-    pub test_exit_code: i32,
-    pub bullets: Vec<String>,
-    pub skills: Vec<String>,
-    pub scope: String,
-    pub changes: usize,
-}
-
-pub fn score_session(
-    ledger_path: &Path,
-    vault_path: &Path,
-    session_id: Option<&str>,
-    test_exit_code: i32,
-    project: Option<&str>,
-    _repo_dir: Option<&Path>,
-) -> Result<ScoredSessionResult, String> {
-    let entries = read_ledger(ledger_path, None, None);
-    if entries.is_empty() {
-        return Ok(ScoredSessionResult {
-            session_id: session_id.unwrap_or_default().to_string(),
-            scored: false,
-            reward: 0,
-            test_exit_code,
-            bullets: Vec::new(),
-            skills: Vec::new(),
-            scope: project.unwrap_or("global").to_string(),
-            changes: 0,
-        });
-    }
-
-    let target_session_id = match session_id {
-        Some(s) if !s.is_empty() => s.to_string(),
-        _ => entries
-            .iter()
-            .rev()
-            .find(|e| !e.session_id.is_empty())
-            .map(|e| e.session_id.clone())
-            .unwrap_or_default(),
-    };
-
-    if target_session_id.is_empty() {
-        return Ok(ScoredSessionResult {
-            session_id: String::new(),
-            scored: false,
-            reward: 0,
-            test_exit_code,
-            bullets: Vec::new(),
-            skills: Vec::new(),
-            scope: project.unwrap_or("global").to_string(),
-            changes: 0,
-        });
-    }
-
-    let session_entries: Vec<&LedgerEntry> = entries
-        .iter()
-        .filter(|e| e.session_id == target_session_id)
-        .collect();
-
-    if session_entries.is_empty() {
-        return Ok(ScoredSessionResult {
-            session_id: target_session_id,
-            scored: false,
-            reward: 0,
-            test_exit_code,
-            bullets: Vec::new(),
-            skills: Vec::new(),
-            scope: project.unwrap_or("global").to_string(),
-            changes: 0,
-        });
-    }
-
-    let mut bullets: Vec<String> = Vec::new();
-    let mut skills: Vec<String> = Vec::new();
-    let mut session_project: Option<String> = project.map(|s| s.to_string());
-
-    for e in &session_entries {
-        if session_project.is_none()
-            && !e.project.is_empty()
-            && e.project != "all"
-            && e.project != "global"
-            && e.event != "skill"
-        {
-            session_project = Some(e.project.clone());
-        }
-        for b in &e.injected_bullets {
-            if !bullets.contains(b) {
-                bullets.push(b.clone());
-            }
-        }
-        if e.event == "skill" && !e.project.is_empty() && !skills.contains(&e.project) {
-            skills.push(e.project.clone());
-        }
-    }
-
-    let scope = session_project.unwrap_or_else(|| "global".to_string());
-    let is_success = test_exit_code == 0;
-    let reward: i64 = if is_success { 1 } else { -1 };
-
-    let mut tag_ops = Vec::new();
-    for b in &bullets {
-        tag_ops.push(crate::ace::TagOp {
-            id: b.clone(),
-            helpful: if is_success { Some(1) } else { None },
-            harmful: if !is_success { Some(1) } else { None },
-            session: Some(target_session_id.clone()),
-            // QUOR-02: a passing test run in the bullet's session is the strongest evidence
-            evidence: is_success.then(|| "test_pass".to_string()),
-        });
-    }
-    for s in &skills {
-        tag_ops.push(crate::ace::TagOp {
-            id: format!("skill:{}", s),
-            helpful: if is_success { Some(1) } else { None },
-            harmful: if !is_success { Some(1) } else { None },
-            session: None,
-            evidence: None,
-        });
-    }
-
-    let mut changes = 0;
-    if !tag_ops.is_empty() {
-        let delta_ops = crate::ace::DeltaOps {
-            add: None,
-            tag: Some(tag_ops.clone()),
-            remove: None,
-        };
-        if let Ok(ch) = crate::ace::apply_with_lock(vault_path, &scope, &delta_ops) {
-            changes += ch;
-        }
-        if scope != "global" {
-            let _ = crate::ace::apply_with_lock(vault_path, "global", &delta_ops)
-                .map(|ch| changes += ch);
-        }
-    }
-
-    record(
-        ledger_path,
-        "session_scored",
-        &scope,
-        &format!("exit_code={};reward={}", test_exit_code, reward),
-        &skills,
-        &bullets,
-        0.0,
-        None,
-        Some(&target_session_id),
-    );
-
-    Ok(ScoredSessionResult {
-        session_id: target_session_id,
-        scored: true,
-        reward,
-        test_exit_code,
-        bullets,
-        skills,
-        scope,
-        changes,
-    })
 }
 
 #[cfg(test)]

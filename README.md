@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/fallback-Python%20stdlib-FFD43B?style=for-the-badge&logo=python&logoColor=white&labelColor=0B0F17)](hive.py)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20·%20read--only-38BDF8?style=for-the-badge&labelColor=0B0F17)](#-mcp-tools)
 [![Obsidian](https://img.shields.io/badge/memory-Obsidian%20vault-A78BFA?style=for-the-badge&logo=obsidian&logoColor=white&labelColor=0B0F17)](docs/vault-conventions.md)
-[![License: MIT](https://img.shields.io/badge/license-MIT-34D399?style=for-the-badge&labelColor=0B0F17)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-BSL_1.1-34D399?style=for-the-badge&labelColor=0B0F17)](LICENSE)
 
 **[Quick start](#-quick-start)** ·
 **[How it works](#-how-it-works)** ·
@@ -109,7 +109,7 @@ flowchart LR
         AG["Antigravity"]
     end
 
-    subgraph Hive["🐝 hive (Rust · Python fallback)"]
+    subgraph Hive["🐝 hive (Rust engine)"]
         direction TB
         MCP["read-only stdio MCP<br/>context · search · graph<br/>status · lint · skill"]
         LOOP["learning loop<br/>traces · codices · quorum<br/>curate · governance"]
@@ -166,12 +166,12 @@ cargo run --release -- status  # index the vault, report graph freshness
 <summary><img src="assets/readme/logos/python.svg" height="16" alt=""> <b>Pure Python</b> (stdlib only, zero install)</summary>
 
 ```bash
-python -m unittest discover    # tests/python/; no network or model
-python hive.py status          # uses the native binary when available
-HIVE_FORCE_PYTHON=1 python hive.py status   # macOS/Linux
+cargo test                      # unit and integration tests, no network or model
+cargo run --release -- status   # index the vault and report graph freshness
+python hive.py status           # launcher: runs the release binary (build it first)
 ```
 
-In PowerShell, set `$env:HIVE_FORCE_PYTHON = "1"`, then run `python hive.py status`.
+Set `HIVE_BIN` to point the launchers at a binary elsewhere.
 
 </details>
 
@@ -333,7 +333,7 @@ Vault content is read-only through MCP. `hive_skill` may install a requested ski
 <div align="center">
 <br>
 
-<sub>Shared memory for AI-assisted development. MIT licensed.<br>
+<sub>Shared memory for AI-assisted development. BSL 1.1, converts to Apache-2.0 on 2030-11-27.<br>
 Logos from <a href="https://simpleicons.org">Simple Icons</a> (CC0) and <a href="https://github.com/lobehub/lobe-icons">Lobe Icons</a> (MIT, <a href="assets/readme/logos/THIRD_PARTY_NOTICES.md">notice</a>); trademarks belong to their owners.</sub>
 
 </div>

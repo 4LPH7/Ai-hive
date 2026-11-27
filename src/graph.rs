@@ -452,8 +452,7 @@ pub fn repo_dir(repo: &str) -> Option<PathBuf> {
         }
     }
     let want = slugify(path.file_name().and_then(|f| f.to_str()).unwrap_or(repo));
-    let re = Regex::new(r"^[a-z0-9._-]+$").unwrap();
-    if !re.is_match(&want) || want == "." || want == ".." {
+    if !crate::common::is_safe_slug(&want) {
         return None;
     }
     for root in &roots {

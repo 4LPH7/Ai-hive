@@ -1,4 +1,3 @@
-use crate::ace::{format_bullets, load_injectable, select_bullets};
 use crate::common::{
     active_work_cell_matches, default_db_path, default_projects, note_age, slugify, validate_slug,
 };
@@ -548,17 +547,15 @@ pub fn tool_context(
 
     // 2. Playbook Section
     let mut playbook_section = String::new();
-    let mut combined_bullets = Vec::new();
-    if let Ok(glob_sec) = load_injectable(&idx.vault, "global") {
-        combined_bullets.extend(select_bullets(&glob_sec, task, 8));
+    let mut scopes = vec!["global".to_string()];
+    if slug != "global" {
+        scopes.push(slug.clone());
     }
-    if let Ok(proj_sec) = load_injectable(&idx.vault, &slug) {
-        combined_bullets.extend(select_bullets(&proj_sec, task, 8));
-    }
-    if !combined_bullets.is_empty() {
+    let rows = crate::ace::select(&idx.vault, &scopes, task, crate::ace::INJECT_LIMIT);
+    if !rows.is_empty() {
         playbook_section = format!(
             "## Playbook (ACE; note ids you use, run skill hive-ace after substantial work)\n{}",
-            format_bullets(&combined_bullets)
+            crate::ace::format_rows(&rows)
         );
     }
 

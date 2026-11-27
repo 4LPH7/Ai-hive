@@ -1,5 +1,6 @@
-use crate::ace::{is_secret, load, MAX_BULLET_CHARS};
+use crate::ace::{load, MAX_BULLET_CHARS};
 use crate::llm::{chat_completion, load_llm_config, resolve_combo};
+use crate::secrets::is_secret;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;

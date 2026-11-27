@@ -1,10 +1,10 @@
 [package]
 name = "ai-hive"
-version = "2.5.0"
+version = "2.8.0"
 edition = "2021"
 authors = ["4LPH7"]
 description = "High-performance shared memory MCP server for AI coding agents"
-license = "MIT"
+license = "BUSL-1.1"
 repository = "https://github.com/4LPH7/Hive_Mind"
 homepage = "https://github.com/4LPH7/Hive_Mind"
 

@@ -413,7 +413,7 @@ fn test_score_session_rust_success_and_failure() {
 
     // Score success
     let res =
-        ai_hive::ledger::score_session(&ledger, &vault, Some("session-rust-1"), 0, None, None)
+        ai_hive::scoring::score_session(&ledger, &vault, Some("session-rust-1"), 0, None, None)
             .unwrap();
     assert!(res.scored);
     assert_eq!(res.reward, 1);
@@ -441,7 +441,7 @@ fn test_score_session_rust_success_and_failure() {
     );
 
     let res_fail =
-        ai_hive::ledger::score_session(&ledger, &vault, Some("session-rust-2"), 1, None, None)
+        ai_hive::scoring::score_session(&ledger, &vault, Some("session-rust-2"), 1, None, None)
             .unwrap();
     assert!(res_fail.scored);
     assert_eq!(res_fail.reward, -1);
@@ -1163,5 +1163,140 @@ fn test_verify_cli_cross_agent_weight() {
     assert!(!run(&["verify", "demo", "pit-99999", a], "sess-d", "codex")
         .status
         .success());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The ACE hooks through the binary with real hook stdin JSON (pit-00013: a hook that ignored stdin silently
+/// disabled the checkpoint): start injects lessons as SessionStart JSON; stop blocks once 25+ tool calls with
+/// an edit ran, then not again for the same session; `stop_hook_active` never blocks.
+#[test]
+fn test_ace_hooks_read_stdin_and_checkpoint_once() {
+    use std::io::Write;
+    let tmp = std::env::temp_dir().join(format!("hive_hooks_cli_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let vault = tmp.join("vault");
+    std::fs::create_dir_all(vault.join("_meta")).unwrap();
+    std::fs::write(
+        vault.join("_meta").join("playbook.md"),
+        "## commands\n- [cmd-00001] seen=3 helpful=3 harmful=0 :: write JSON to a file, not echo\n",
+    )
+    .unwrap();
+    let run = |args: &[&str], stdin: &str| {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .env("HIVE_DB", tmp.join("hive.sqlite"))
+            .env("HIVE_LEDGER", tmp.join("ledger.jsonl"))
+            .env("HIVE_VAULT", &vault)
+            .env("HIVE_PROJECTS", tmp.join("projects"))
+            .env("HIVE_ACE_STATE", tmp.join("ace-state.json"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "a hook never fails the session");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let start = run(
+        &["ace", "hook-start"],
+        r#"{"cwd": "C:/elsewhere", "session_id": "s1"}"#,
+    );
+    let v: serde_json::Value = serde_json::from_str(start.trim()).unwrap();
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(
+        ctx.contains("- [cmd-00001] (global/commands, +3/-0) write JSON to a file"),
+        "{ctx}"
+    );
+    let transcript = tmp.join("t.jsonl");
+    let tool = |name: &str| {
+        serde_json::json!({"message": {"content": [{"type": "tool_use", "id": "x", "name": name, "input": {}}]}})
+            .to_string()
+    };
+    let lines: Vec<String> = (0..30)
+        .map(|i| tool(if i == 0 { "Edit" } else { "Read" }))
+        .collect();
+    std::fs::write(&transcript, lines.join("\n")).unwrap();
+    let payload =
+        serde_json::json!({"session_id": "s1", "transcript_path": transcript}).to_string();
+    let first = run(&["ace", "hook-stop"], &payload);
+    assert!(
+        first.contains(r#""decision":"block""#) && first.contains("30 tool calls"),
+        "{first}"
+    );
+    assert_eq!(
+        run(&["ace", "hook-stop"], &payload).trim(),
+        "",
+        "checkpoint fires once per 25 calls"
+    );
+    let active = serde_json::json!({"session_id": "s2", "transcript_path": transcript, "stop_hook_active": true});
+    assert_eq!(run(&["ace", "hook-stop"], &active.to_string()).trim(), "");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// F2 regression: a ledger path set in `--config` must receive records written from the MCP server, not only
+/// from the CLI path. Before the single config owner, `mcp.rs` re-read the default config and wrote elsewhere.
+#[test]
+fn test_config_ledger_override_reaches_mcp_records() {
+    use std::io::Write;
+    let tmp = std::env::temp_dir().join(format!("hive_cfg_ledger_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let vault = tmp.join("vault");
+    std::fs::create_dir_all(vault.join("projects").join("demo")).unwrap();
+    std::fs::write(
+        vault.join("projects").join("demo").join("note.md"),
+        "---\ntype: note\nproject: demo\nagent: claude\nstatus: active\nupdated: 2026-11-27\nsource: test\n---\n# Lint target\n\nprice fetcher notes.\n",
+    )
+    .unwrap();
+    let ledger = tmp.join("custom-ledger.jsonl");
+    let cfg = tmp.join("hive.toml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "vault = \"{}\"\ndb = \"{}\"\nledger = \"{}\"\n",
+            vault
+                .display()
+                .to_string()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+            tmp.join("hive.sqlite")
+                .display()
+                .to_string()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+            ledger
+                .display()
+                .to_string()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+        ),
+    )
+    .unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+        .args(["--config", cfg.to_str().unwrap(), "serve"])
+        .env("HIVE_SESSION_ID", "cfg-test")
+        .env("HIVE_AGENT", "claude")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let req = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "hive_skill", "arguments": {"task": "zebra quantum ledger check", "scope": "local", "auto_install": false}}});
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{req}\n").as_bytes())
+        .unwrap();
+    let _ = child.wait_with_output().unwrap();
+    let written = std::fs::read_to_string(&ledger).unwrap_or_default();
+    assert!(
+        written.contains("\"event\":\"skill\""),
+        "ledger at --config path got: {written}"
+    );
     let _ = std::fs::remove_dir_all(&tmp);
 }

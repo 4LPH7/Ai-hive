@@ -1,4 +1,4 @@
-use crate::ace::scrub_secrets;
+use crate::secrets::scrub_secrets;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;

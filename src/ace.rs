@@ -168,19 +168,7 @@ impl Drop for PlaybookLock {
     }
 }
 
-pub fn is_secret(text: &str) -> bool {
-    let re = Regex::new(
-        r"(?i)(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,})"
-    ).unwrap();
-    re.is_match(text)
-}
-
-pub fn scrub_secrets(text: &str) -> String {
-    let re = Regex::new(
-        r"(?i)(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,})"
-    ).unwrap();
-    re.replace_all(text, "[REDACTED_SECRET]").to_string()
-}
+pub use crate::secrets::{is_secret, scrub_secrets};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Bullet {
@@ -808,36 +796,92 @@ pub fn load_injectable(vault: &Path, scope: &str) -> Result<HashMap<String, Vec<
     Ok(sections)
 }
 
-pub fn select_bullets(
-    sections: &HashMap<String, Vec<Bullet>>,
-    task: &str,
-    limit: usize,
-) -> Vec<Bullet> {
-    let mut all: Vec<Bullet> = sections.values().flatten().cloned().collect();
-    if task.is_empty() {
-        all.sort_by_key(|a| std::cmp::Reverse(a.helpful - a.harmful));
-    } else {
-        all.sort_by(|a, b| {
-            let sc_a = (a.helpful - a.harmful) as f64 + jaccard_similarity(&a.content, task) * 5.0;
-            let sc_b = (b.helpful - b.harmful) as f64 + jaccard_similarity(&b.content, task) * 5.0;
-            sc_b.partial_cmp(&sc_a).unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
-    all.truncate(limit);
-    all
+fn select_tokens(text: &str) -> HashSet<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| t.len() > 2)
+        .map(str::to_string)
+        .collect()
 }
 
-pub fn format_bullets(bullets: &[Bullet]) -> String {
-    bullets
-        .iter()
-        .map(|b| {
+/// (scope, section, bullet) rows of the top injectable lessons across scopes: net evidence (minus decay)
+/// first, task-term overlap as a multiplier. The one selection used by hooks, `ace show` and `hive_context`.
+pub fn select(
+    vault: &Path,
+    scopes: &[String],
+    task: &str,
+    limit: usize,
+) -> Vec<(String, String, Bullet)> {
+    let want = select_tokens(task);
+    let today = chrono::Local::now().date_naive();
+    let mut pool = Vec::new();
+    for scope in scopes {
+        let Ok(sections) = load_injectable(vault, scope) else {
+            continue;
+        };
+        for (name, _) in SECTIONS {
+            for b in sections.get(*name).into_iter().flatten() {
+                let net = b.helpful - b.harmful - bullet_decay(b, today);
+                let overlap = want.intersection(&select_tokens(&b.content)).count() as i64;
+                pool.push((
+                    (net + 1) * (1 + overlap),
+                    scope.clone(),
+                    name.to_string(),
+                    b.clone(),
+                ));
+            }
+        }
+    }
+    pool.sort_by_key(|(score, ..)| std::cmp::Reverse(*score));
+    pool.into_iter()
+        .take(limit)
+        .map(|(_, s, n, b)| (s, n, b))
+        .collect()
+}
+
+pub fn format_rows(rows: &[(String, String, Bullet)]) -> String {
+    rows.iter()
+        .map(|(scope, name, b)| {
             format!(
-                "- [{}] helpful={} harmful={} :: {}",
+                "- [{}] ({scope}/{name}, +{}/-{}) {}",
                 b.id, b.helpful, b.harmful, b.content
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Applies a delta under the playbook lock and records what it did: the ids it added (for provenance) and the
+/// playbook's content sha. Returns the number of changes. The CLI and any other caller use this one path.
+pub fn apply_recorded(
+    vault: &Path,
+    ledger: &Path,
+    scope: &str,
+    ops: &DeltaOps,
+) -> Result<usize, String> {
+    let ids = |v: &Path| -> HashSet<String> {
+        load(v, scope)
+            .map(|s| s.values().flatten().map(|b| b.id.clone()).collect())
+            .unwrap_or_default()
+    };
+    let before = ids(vault);
+    let changed = apply_with_lock(vault, scope, ops)?;
+    let mut added: Vec<String> = ids(vault).difference(&before).cloned().collect();
+    added.sort();
+    let content_sha = scope_path(vault, scope)
+        .ok()
+        .and_then(|p| std::fs::read(p).ok())
+        .map(|b| crate::common::sha256(&b))
+        .unwrap_or_default();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    crate::ledger::record_ace_apply(
+        ledger,
+        scope,
+        &added,
+        &content_sha,
+        &crate::ledger::repo_head(&cwd),
+    );
+    Ok(changed)
 }
 
 #[cfg(test)]

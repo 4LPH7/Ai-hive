@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - v2.8.0 (Phase 8 addendum)
 
+### Changed (untangle, Rust is the only engine)
+- The Python mirrors of the engine are removed. `hive.py`, `ace.py` and `lint.py` are launchers that run the
+  native binary (`HIVE_BIN`, then `target/release/hive`, then `hive` on PATH), so existing configs keep working.
+  The ACE hooks, the Codex stop hook and the Antigravity adapter run the binary's `hive ace hook-*` commands.
+- The Python unit tests are removed; their behaviour is covered by the Rust unit and integration tests.
+- A `--config` override now reaches every ledger, index and artifact writer (one config owner).
+- A failed ledger append is reported as a failure, not as success.
+- The CI Python jobs are replaced by a launcher smoke test in the Rust jobs.
+
 ### Added
 - **RATCHET-01 failure refs (`quorum.py`, `src/quorum.rs`, `ace.py`, `src/ace.rs`)**: every ACE ADD may carry
   `failure_ref` (commit sha, error hash or session id; 4-120 safe chars, secret-checked). A new bullet without a

@@ -21,14 +21,14 @@ uses can be changed with an environment variable:
 ## Step 2: Get the code and run the tests
 
 ```bash
-git clone https://github.com/4LPH7/ai-hive.git D:\PROJECTS\ai-hive
-cd D:\PROJECTS\ai-hive
-python -m unittest discover  # Python suite: tests/python/
+git clone https://github.com/4LPH7/Hive_Mind.git D:\PROJECTS\Hive_Mind
+cd D:\PROJECTS\Hive_Mind
+cargo test  # Rust unit and integration suite
 ```
 
 All tests use temporary folders; none touch your vault.
 
-Contributors: enable the repo's pre-commit gates (fmt, clippy, `cargo test`, unittest) once per clone with
+Contributors: enable the repo's pre-commit gates (fmt, clippy, `cargo test`) once per clone with
 `git config core.hooksPath .githooks`. They run through `scripts/testcache.py`, which reuses a pass recorded
 for the same HEAD, uncommitted diff and command (stored in `.git/hive-testcache.json`), so repeating a commit
 attempt or re-running CI on a tested commit costs seconds. Failures always re-run; force a real run with
@@ -95,15 +95,15 @@ Ready-made snippets are in [`examples/`](../examples).
 **Claude Code** (`~/.claude.json`, user scope):
 
 ```bash
-claude mcp add --scope user --transport stdio hive -- C:\Python315\python.exe -I D:\PROJECTS\ai-hive\hive.py serve
+claude mcp add --scope user --transport stdio hive -- D:\PROJECTS\Hive_Mind\target\release\hive.exe serve
 ```
 
 **Codex** (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.hive]
-command = 'C:\Python315\python.exe'
-args = ['-I', 'D:\PROJECTS\ai-hive\hive.py', 'serve']
+command = 'D:\PROJECTS\Hive_Mind\target\release\hive.exe'
+args = ['serve']
 ```
 
 **Antigravity** (`~/.gemini/config/mcp_config.json`): see `examples/antigravity-mcp_config.json`.
@@ -128,8 +128,8 @@ with `hive-ace`.
 ## Step 7: Turn on self-improvement (ACE)
 
 1. Install the skill for each agent: copy `skills/hive-ace/` to `~/.claude/skills/`, `~/.codex/skills/`
-   and your Antigravity skills folder. Replace the `D:/PROJECTS/ai-hive` and `D:\Valut\OBS` paths inside
-   `SKILL.md` with yours.
+   and your Antigravity skills folder. The skill reads the vault from the `HIVE_VAULT` environment variable,
+   so set that to your vault folder; it contains no paths to edit.
 2. Add the Claude Code hooks from `examples/claude-settings-hooks.json` to `~/.claude/settings.json`.
    Append them next to any hooks you already have; do not replace the arrays.
    - `SessionStart` runs `ace.py hook-start`: the top 12 playbook lessons go into the session's context.
