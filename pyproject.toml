@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-hive"
-version = "2.5.0"
+version = "2.8.0"
 description = "Shared memory for all AI coding agents (Obsidian vault + graphify code graphs)"
 readme = "README.md"
 license = { text = "BUSL-1.1" }
@@ -28,4 +28,4 @@ Issues = "https://github.com/4LPH7/Hive_Mind/issues"
 hive = "hive:main"
 
 [tool.setuptools]
-py-modules = ["hive", "ace", "curate", "ledger", "lint", "llm", "miner", "skill"]
+py-modules = ["hive", "ace", "lint"]
