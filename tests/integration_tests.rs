@@ -855,6 +855,185 @@ fn test_handoff_cli_write_and_context_read() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// v2.7.2: DETAIL-01 end to end through `hive serve`: concise is the MCP default, detailed on request.
+#[test]
+fn test_mcp_serve_concise_search_and_graph() {
+    use std::io::Write;
+    let tmp = std::env::temp_dir().join(format!("hive_concise_e2e_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let notes = tmp
+        .join("vault")
+        .join("projects")
+        .join("demo")
+        .join("notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    for i in 0..4 {
+        std::fs::write(
+            notes.join(format!("price-{i}.md")),
+            format!("---\ntype: note\nproject: demo\nagent: claude\nstatus: active\nupdated: 2026-11-2{i}\nsource: test\n---\n# Price fetcher {i}\n\nThe price fetcher parses rows {}.\n", "rows ".repeat(i + 1)),
+        )
+        .unwrap();
+    }
+    let graph = tmp.join("projects").join("demo").join("graphify-out");
+    std::fs::create_dir_all(&graph).unwrap();
+    std::fs::write(
+        graph.join("graph.json"),
+        r#"{"nodes": [{"id": "a", "label": "PriceFetcher", "source_file": "src/a.rs", "source_location": "L3", "community_name": "pricing"},
+                      {"id": "b", "label": "parse_rows", "source_file": "src/b.rs", "source_location": "L9", "community_name": "pricing"}],
+            "links": [{"source": "a", "target": "b", "relation": "calls", "confidence_score": 1.0}]}"#,
+    )
+    .unwrap();
+    let call = |id: u32, name: &str, args: serde_json::Value| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": name, "arguments": args}})
+        .to_string()
+    };
+    let input = [
+        call(1, "hive_search", serde_json::json!({"query": "price fetcher rows", "project": "demo"})),
+        call(2, "hive_search", serde_json::json!({"query": "price fetcher rows", "project": "demo", "detail": "detailed"})),
+        call(3, "hive_graph", serde_json::json!({"repo": "demo", "query": "PriceFetcher"})),
+        call(4, "hive_graph", serde_json::json!({"repo": "demo", "query": "PriceFetcher", "detail": "detailed"})),
+        call(5, "hive_lint", serde_json::json!({"detail": "full"})),
+    ]
+    .join("\n")
+        + "\n";
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+        .arg("serve")
+        .env("HIVE_DB", tmp.join("hive.sqlite"))
+        .env("HIVE_LEDGER", tmp.join("ledger.jsonl"))
+        .env("HIVE_VAULT", tmp.join("vault"))
+        .env("HIVE_PROJECTS", tmp.join("projects"))
+        .env("HIVE_ARTIFACTS", tmp.join("artifacts"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let texts: Vec<(String, bool)> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            let r = &v["result"];
+            (
+                r["content"][0]["text"].as_str().unwrap_or("").to_string(),
+                r["isError"].as_bool().unwrap_or(false),
+            )
+        })
+        .collect();
+    assert_eq!(texts.len(), 5, "{texts:?}");
+    let (concise, detailed) = (&texts[0].0, &texts[1].0);
+    assert!(
+        concise.lines().count() >= 1 && !concise.contains("\n  "),
+        "{concise}"
+    );
+    for line in concise.lines() {
+        assert!(
+            line.starts_with("- projects/demo/notes/price-")
+                && line.contains(" (note) Price fetcher "),
+            "{line}"
+        );
+    }
+    assert!(
+        detailed.contains("\n  ") && detailed.contains("active"),
+        "{detailed}"
+    );
+    let (g_concise, g_detailed) = (&texts[2].0, &texts[3].0);
+    assert!(
+        g_concise.contains("* PriceFetcher  src/a.rs:3"),
+        "{g_concise}"
+    );
+    assert!(
+        !g_concise.contains("[pricing]") && !g_concise.contains("edges among these"),
+        "{g_concise}"
+    );
+    assert!(
+        g_detailed.contains("[pricing]") && g_detailed.contains("edges among these"),
+        "{g_detailed}"
+    );
+    assert!(texts[4].1, "an unknown detail value is an error");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// v2.7.2: `hive handoff write` warns on stderr when the protected core exceeds the role budget.
+#[test]
+fn test_handoff_write_warns_when_core_exceeds_role_budget() {
+    let tmp = std::env::temp_dir().join(format!("hive_handoff_budget_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("vault")).unwrap();
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .env("HIVE_DB", tmp.join("hive.sqlite"))
+            .env("HIVE_LEDGER", tmp.join("ledger.jsonl"))
+            .env("HIVE_VAULT", tmp.join("vault"))
+            .env("HIVE_SESSION_ID", "budget-test")
+            .env("HIVE_AGENT", "claude")
+            .output()
+            .unwrap()
+    };
+    let long = |tag: &str, i: usize| -> String {
+        let s = format!(
+            "{tag} {i} {}",
+            "tokenizer static link fails when vendored ".repeat(10)
+        );
+        s.chars()
+            .take(300)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    };
+    let paths: Vec<String> = (0..6)
+        .map(|i| {
+            format!(
+                "{}f{i}.rs",
+                &format!("src/p{i}/{}", "deep/".repeat(40))[..194]
+            )
+        })
+        .collect();
+    let rec = |role: &str, goal: String, dead: Vec<String>, paths: Vec<String>| {
+        serde_json::json!({"goal": goal, "outcome": "partial: see dead ends", "files": ["src/a.rs"],
+            "dead_ends": dead, "invariants": [], "open_threads": [], "status": "PARTIAL", "role": role,
+            "completed_plan_items": [], "artifact_paths": paths})
+        .to_string()
+    };
+    let big = tmp.join("big.json");
+    std::fs::write(
+        &big,
+        rec(
+            "reviewer",
+            long("goal", 0),
+            (0..6).map(|i| long("dead end", i)).collect(),
+            paths,
+        ),
+    )
+    .unwrap();
+    let out = run(&["handoff", "write", "demo", big.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("over the reviewer budget 800"), "{err}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("role=reviewer"));
+    let small = tmp.join("small.json");
+    std::fs::write(
+        &small,
+        rec("reviewer", "small one".into(), vec!["d".into()], vec![]),
+    )
+    .unwrap();
+    let out = run(&["handoff", "write", "demo", small.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("over the"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// RATCHET-02 + Phase 8 gate through the binary: propose, accept, lint ERROR, and a staged repo file blocked.
 #[test]
 fn test_ratchet_cli_propose_accept_lint_and_staged() {

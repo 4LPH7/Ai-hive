@@ -107,7 +107,7 @@ class HandoffViewTest(unittest.TestCase):
         self.assertIn("> - serde_yaml frontmatter", view)
         self.assertIn("> - artifact:" + "a" * 64, view)
         self.assertIn("> - HAND-01 schema", view)
-        self.assertTrue(view.rstrip().endswith(str(p.resolve())))
+        self.assertTrue(view.rstrip().endswith(__import__("os").path.abspath(p)))
         tiny = codex.handoff_view(self.vault, "demo", p.stem, budget=10)  # the core never yields
         self.assertIn("> - serde_yaml frontmatter", tiny)
         self.assertIn("full envelope:", tiny)
@@ -147,6 +147,72 @@ class HandoffViewTest(unittest.TestCase):
             out = hive.tool_context("demo", "anything", 1500, p.stem)
         self.assertTrue(out.startswith(f"## handoff {p.stem}"))
         self.assertNotIn("_memory.md", out)
+
+
+class ProvenanceTest(unittest.TestCase):
+    """v2.7.2: provenance_sha256 seals project/agent/source/updated to the body hash."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name)
+        self.db = sqlite3.connect(":memory:")
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def test_full_text_matches_rust_mirror(self):
+        import hashlib
+        for rec, want in ((REC, "ceaa9843f2051f922a55b181cb89e451a65b8e9b454758947781db2b76c7e9ff"),
+                          (HAND, "1b92698a996bc13601291cdf5d3be0fc05bcb569f1a9272ec52973a2a9cdb240")):
+            _, text = codex.render("demo", rec, "claude", "s1", "2026-11-25")
+            self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(), want)  # = codex.rs
+
+    def test_edited_frontmatter_is_detected_and_legacy_notes_still_verify(self):
+        _, text = codex.render("demo", REC, "claude", "s1", "2026-11-25")
+        self.assertIsNone(codex.verify(text))
+        for old, new in (("source: session s1", "source: session s2"), ("agent: claude", "agent: codex"),
+                         ("updated: 2026-11-25", "updated: 2026-11-26"), ("project: demo", "project: other")):
+            self.assertIn("provenance_sha256 mismatch", codex.verify(text.replace(old, new)), old)
+        legacy = "\n".join(l for l in text.splitlines() if not l.startswith("provenance_sha256")) + "\n"
+        self.assertIsNone(codex.verify(legacy))
+        self.assertFalse(codex.has_provenance(legacy))
+
+    def test_handoff_view_refuses_edited_and_unsealed_handoffs(self):
+        p = codex.write_handoff(self.vault, self.db, "demo", HAND, "claude", "bad-s", "2026-11-25", 0)
+        text = p.read_text(encoding="utf-8")
+        p.write_text(text.replace("source: session bad-s", "source: session good-s"), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "integrity check failed"):
+            codex.handoff_view(self.vault, "demo", p.stem)
+        p.write_text("\n".join(l for l in text.splitlines() if not l.startswith("provenance_sha256")) + "\n",
+                     encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "no provenance_sha256"):
+            codex.handoff_view(self.vault, "demo", p.stem)
+
+    def test_pointer_is_the_absolute_path_rust_prints(self):
+        import os
+        p = codex.write_handoff(self.vault, self.db, "demo", HAND, "claude", "s1", "2026-11-25", 0)
+        view = codex.handoff_view(self.vault, "demo", p.stem)
+        self.assertTrue(view.endswith(f"full envelope: {os.path.abspath(p)}"))
+
+    def test_cli_warns_when_core_exceeds_role_budget(self):
+        import contextlib
+        import io
+        rec_file = self.vault / "rec.json"
+        rec_file.write_text(json.dumps(dict(worst_case(), role="reviewer")), encoding="utf-8")
+        err = io.StringIO()
+        with mock.patch.object(hive, "VAULT", self.vault), mock.patch.object(hive, "DB_PATH", self.vault / "h.sqlite"), \
+                contextlib.redirect_stderr(err):
+            out = hive.tool_handoff("write", "demo", str(rec_file))
+        self.assertRegex(err.getvalue(), r"core is ~\d+ tokens, over the reviewer budget 800")
+        self.assertIn("role=reviewer", out)
+        small = self.vault / "small.json"
+        small.write_text(json.dumps(dict(HAND, goal="small one")), encoding="utf-8")
+        err = io.StringIO()
+        with mock.patch.object(hive, "VAULT", self.vault), mock.patch.object(hive, "DB_PATH", self.vault / "h.sqlite"), \
+                contextlib.redirect_stderr(err):
+            hive.tool_handoff("write", "demo", str(small))
+        self.assertEqual(err.getvalue(), "")
 
 
 class HandoffGateTest(unittest.TestCase):

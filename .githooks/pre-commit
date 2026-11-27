@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# ai-hive pre-commit: the same gates as CI, through scripts/testcache.py so a tree that already
+# passed (same HEAD + same uncommitted diff + same command) is not re-tested.
+# Enable once per clone:  git config core.hooksPath .githooks
+# Skip once:              git commit --no-verify     Force a real run: HIVE_TESTCACHE_FORCE=1 git commit
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+PY="${PYTHON:-python}"
+command -v "$PY" >/dev/null 2>&1 || PY=python3
+FORCE=()
+[ "${HIVE_TESTCACHE_FORCE:-0}" = "1" ] && FORCE=(--force)
+LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
+
+gate() {
+  if ! "$PY" -I scripts/testcache.py run "${FORCE[@]}" -- "$@" >"$LOG" 2>&1; then
+    cat "$LOG"
+    echo "pre-commit: FAILED: $*" >&2
+    exit 1
+  fi
+  tail -1 "$LOG"
+}
+
+gate cargo fmt --check
+gate cargo clippy --all-targets -- -D warnings
+gate cargo test
+gate "$PY" -W error::SyntaxWarning -m unittest
+echo "pre-commit: all gates passed"
