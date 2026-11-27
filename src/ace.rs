@@ -783,14 +783,14 @@ pub fn verify_with_lock(
 pub fn load_injectable(vault: &Path, scope: &str) -> Result<HashMap<String, Vec<Bullet>>, String> {
     let mut sections = load(vault, scope)?;
     let meta = crate::quorum::load(&crate::quorum::meta_path(&scope_path(vault, scope)?));
-    let rules = crate::governance::load_rules(vault); // GOV-02: quarantined bullets never injected
-    let shipped = crate::ratchet::load_rules(vault); // RATCHET-02: a shipped lint rule replaced the bullet
+    let rules = crate::policy::load_rules(vault); // GOV-02: quarantined bullets never injected
+    let shipped = crate::ratchet_rules::load_rules(vault); // RATCHET-02: a shipped lint rule replaced the bullet
     let slug = crate::common::slugify(scope);
     for bullets in sections.values_mut() {
         bullets.retain(|b| {
             crate::quorum::injectable(crate::quorum::state_of(&meta, &b.id))
-                && !crate::governance::bullet_hidden(&rules, meta.get(&b.id))
-                && !crate::ratchet::retired(&shipped, &slug, &b.id)
+                && !crate::policy::bullet_hidden(&rules, meta.get(&b.id))
+                && !crate::ratchet_rules::retired(&shipped, &slug, &b.id)
         });
     }
     Ok(sections)
@@ -886,6 +886,107 @@ pub fn apply_recorded(
 
 #[cfg(test)]
 mod tests {
+    use crate::quorum::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn test_evidence_weights_and_same_session_repeat() {
+        let meta = reconcile(
+            &MetaMap::new(),
+            &["pit-00001".into()],
+            &[],
+            "sa",
+            "claude",
+            0,
+        );
+        let tag = |m: &MetaMap, s: &str, hint: &str| {
+            add_evidence(
+                m,
+                &[Tag {
+                    id: "pit-00001".into(),
+                    session: s.into(),
+                    agent: "claude".into(),
+                    hint: hint.into(),
+                }],
+                &BTreeMap::new(),
+            )
+        };
+        let m = tag(&meta, "sa", "");
+        assert_eq!(score(&m["pit-00001"]), 0.35);
+        let m = tag(&m, "sa", "");
+        assert_eq!(score(&m["pit-00001"]), 0.35);
+        let m = tag(&m, "sa", "test_pass");
+        assert_eq!(score(&m["pit-00001"]), 1.0);
+        let m = tag(&m, "sb", "");
+        assert_eq!(score(&m["pit-00001"]), 2.0);
+        assert_eq!(sessions(&m["pit-00001"]).len(), 2);
+        // Python-form TAG {id, helpful: n, session, evidence} must survive parse_delta
+        let d = crate::ace::parse_delta(
+            r#"{"operations":[{"type":"TAG","id":"x","helpful":2,"session":"s9","evidence":"test_pass"}]}"#,
+        )
+        .unwrap();
+        let t = &d.tag.unwrap()[0];
+        assert_eq!(
+            (t.helpful, t.session.as_deref(), t.evidence.as_deref()),
+            (Some(2), None, None),
+            "trusted-only fields are dropped from deltas"
+        );
+        let native = crate::ace::parse_delta(
+            r#"{"tag":[{"id":"x","helpful":1,"session":"fake","evidence":"test_pass"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(native.tag.unwrap()[0].session, None);
+        // anonymous proc- sessions share one bucket at self-tag weight
+        let anon = tag(&tag(&meta, "proc-1-a", "test_pass"), "proc-2-b", "");
+        assert_eq!(
+            (score(&anon["pit-00001"]), state_of(&anon, "pit-00001")),
+            (0.35, "scout")
+        );
+        // QUOR-03 promotion: 2 sessions at 2.0 -> canonical; 2 sessions at 1.35 -> quorum; 1 session never
+        assert_eq!(state_of(&m, "pit-00001"), "canonical");
+        let q = tag(&tag(&meta, "sa", ""), "sc", "");
+        assert_eq!(
+            (score(&q["pit-00001"]), state_of(&q, "pit-00001")),
+            (1.35, "quorum")
+        );
+        let one = tag(&tag(&meta, "sa", "test_pass"), "sa", "");
+        assert_eq!(state_of(&one, "pit-00001"), "scout");
+        assert!(injectable("canonical") && !injectable("scout") && !injectable("retired"));
+        let legacy = tag(&MetaMap::new(), "sa", "");
+        assert_eq!(
+            (state_of(&legacy, "pit-00001"), score(&legacy["pit-00001"])),
+            ("canonical", 1.0)
+        );
+    }
+
+    #[test]
+    fn test_apply_with_lock_records_scout_then_retired_without_id_reuse() {
+        let vault = std::env::temp_dir().join(format!("hive-quorum-apply-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&vault);
+        let add = |c: &str| {
+            crate::ace::parse_delta(&format!(
+                r#"{{"add":[{{"section":"pitfalls","content":"{c}"}}]}}"#
+            ))
+            .unwrap()
+        };
+        crate::ace::apply_with_lock(&vault, "demo", &add("first scout lesson about tokenizer"))
+            .unwrap();
+        let mf = meta_path(&crate::ace::scope_path(&vault, "demo").unwrap());
+        let m = crate::quorum::load(&mf);
+        let (id, rec) = m.iter().next().unwrap();
+        assert_eq!(rec.state, "scout");
+        let id = id.clone();
+        let tag = crate::ace::parse_delta(&format!(r#"{{"tag":[{{"id":"{id}","harmful":9}}]}}"#))
+            .unwrap();
+        crate::ace::apply_with_lock(&vault, "demo", &tag).unwrap();
+        assert_eq!(state_of(&crate::quorum::load(&mf), &id), "retired");
+        crate::ace::apply_with_lock(&vault, "demo", &add("another unrelated graph cache rule"))
+            .unwrap();
+        let m = crate::quorum::load(&mf);
+        assert_eq!(m.len(), 2, "second ADD got a fresh id: {m:?}");
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
     use super::*;
 
     #[test]

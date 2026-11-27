@@ -606,7 +606,7 @@ pub fn tool_context(
     let traces_section = match crate::trace::active(&idx.conn, &slug, now) {
         // GOV-02: quarantined traces never reach agents
         Ok(items) => crate::trace::context_section(
-            &crate::governance::visible_traces(&crate::governance::load_rules(&idx.vault), items),
+            &crate::trace::visible_traces(&crate::governance::load_rules(&idx.vault), items),
             task,
         ),
         Err(e) => {
