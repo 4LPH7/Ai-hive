@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lessons injected into >= 20 distinct real sessions (from `context` ledger events; per-process ids ignored)
   that were never tagged helpful and have no shipped rule. A proposal only: the human applies
   `{"remove": [id]}` with `hive ace apply`.
+- **QUOR-06 `hive verify <scope> <bullet-id> <artifact-file>`**: cross-agent verification weighs 1.5 (above
+  test pass 1.0) only from a different agent and session than the lesson's author, with an evidence artifact
+  stored as its sha256. Otherwise it counts as a plain confirm or self-tag. Verify evidence without a valid
+  artifact, or from the author's agent or session, is dropped when the sidecar loads. A verify plus the
+  author's self-tag (1.85) reaches canonical; a plain confirm plus self-tag (1.35) stays quorum.
 
 ### Fixed
 - **`est_tokens` parity**: the Rust estimator counted UTF-8 bytes and a newline after every line, including a
