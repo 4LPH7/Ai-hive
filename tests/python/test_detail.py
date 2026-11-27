@@ -168,7 +168,7 @@ class OffloadTest(unittest.TestCase):
             text = stored.read_text(encoding="utf-8")
             self.assertIn("[REDACTED_SECRET]", text)
             self.assertNotIn("abcdefghijklmnopqrstu", text)
-            self.assertIn(str(stored.resolve()), out)
+            self.assertIn(__import__("os").path.abspath(stored), out)
             old = Path(os.environ["HIVE_ARTIFACTS"]) / ("b" * 64 + ".md")
             old.write_text("old", encoding="utf-8")
             os.utime(old, (time.time() - 8 * 86400,) * 2)
