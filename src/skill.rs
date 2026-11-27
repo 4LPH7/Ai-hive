@@ -751,42 +751,32 @@ pub fn install_skill(
         return Err(format!("failed to create skill directory: {}", e));
     }
 
-    for entry in walkdir::WalkDir::new(&staging_dir).into_iter().flatten() {
-        if entry.file_type().is_file() {
-            let p = entry.path();
-            if let Ok(rel) = p.strip_prefix(&staging_dir) {
-                let target_p = dest_dir.join(rel);
-                if let Some(parent) = target_p.parent() {
-                    let _ = fs::create_dir_all(parent);
-                }
-                let _ = fs::copy(p, target_p);
+    for p in files_under(&staging_dir) {
+        if let Ok(rel) = p.strip_prefix(&staging_dir) {
+            let target_p = dest_dir.join(rel);
+            if let Some(parent) = target_p.parent() {
+                let _ = fs::create_dir_all(parent);
             }
+            let _ = fs::copy(&p, target_p);
         }
     }
     let _ = fs::remove_dir_all(&staging_base);
 
     // Pin package with SHA-256 tree hash in .skill-lock.json
-    use sha2::{Digest, Sha256};
     let mut file_entries = Vec::new();
-    for entry in walkdir::WalkDir::new(&dest_dir).into_iter().flatten() {
-        if entry.file_type().is_file() {
-            let p = entry.path();
-            if p.file_name().and_then(|n| n.to_str()) == Some(".skill-lock.json") {
-                continue;
-            }
-            if let Ok(bytes) = fs::read(p) {
-                let mut hasher = Sha256::new();
-                hasher.update(&bytes);
-                let hash_hex = format!("{:x}", hasher.finalize());
-                let rel = p
-                    .strip_prefix(&dest_dir)
-                    .map(|r| r.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_default();
-                file_entries.push(serde_json::json!({
-                    "path": rel,
-                    "sha256": hash_hex
-                }));
-            }
+    for p in files_under(&dest_dir) {
+        if p.file_name().and_then(|n| n.to_str()) == Some(".skill-lock.json") {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(&p) {
+            let rel = p
+                .strip_prefix(&dest_dir)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            file_entries.push(serde_json::json!({
+                "path": rel,
+                "sha256": crate::common::sha256(&bytes)
+            }));
         }
     }
     let lock_data = serde_json::json!({
@@ -801,6 +791,24 @@ pub fn install_skill(
     );
 
     Ok(dest_dir)
+}
+
+/// Regular files under `root`, following no symlinks; unreadable directories are skipped.
+fn files_under(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for entry in rd.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file() {
+                out.push(entry.path());
+            }
+        }
+    }
+    out
 }
 
 pub fn audit_skill_safety(dir_or_file: &Path) -> (bool, Option<String>) {
@@ -826,10 +834,9 @@ pub fn audit_skill_safety(dir_or_file: &Path) -> (bool, Option<String>) {
     if dir_or_file.is_file() {
         paths.push(dir_or_file.to_path_buf());
     } else if dir_or_file.is_dir() {
-        for entry in walkdir::WalkDir::new(dir_or_file).into_iter().flatten() {
-            if entry.file_type().is_file() {
-                let ext = entry
-                    .path()
+        for p in files_under(dir_or_file) {
+            {
+                let ext = p
                     .extension()
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
@@ -838,7 +845,7 @@ pub fn audit_skill_safety(dir_or_file: &Path) -> (bool, Option<String>) {
                     ext.as_str(),
                     "md" | "py" | "sh" | "bash" | "js" | "ts" | "ps1"
                 ) {
-                    paths.push(entry.path().to_path_buf());
+                    paths.push(p.to_path_buf());
                 }
             }
         }

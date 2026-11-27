@@ -202,7 +202,6 @@ impl GapCluster {
     }
 
     pub fn hash_id(&self) -> String {
-        use sha2::{Digest, Sha256};
         let mut sorted_toks: Vec<String> = self.tokens.iter().cloned().collect();
         sorted_toks.sort();
         let raw = if !sorted_toks.is_empty() {
@@ -210,9 +209,8 @@ impl GapCluster {
         } else {
             self.representative.clone()
         };
-        let mut hasher = Sha256::new();
-        hasher.update(raw.as_bytes());
-        let res = format!("{:x}", hasher.finalize());
+
+        let res = crate::common::sha256(raw.as_bytes());
         res[..8].to_string()
     }
 
