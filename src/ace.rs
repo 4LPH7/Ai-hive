@@ -742,6 +742,55 @@ pub fn apply_with_lock(vault: &Path, scope: &str, ops: &DeltaOps) -> Result<usiz
     Ok(changed)
 }
 
+/// QUOR-06: record a cross-agent verification of `bullet_id` backed by an artifact sha256. Counts as `verify`
+/// (1.5) only from a different agent and session than the lesson's author, else as the plain kind. Same lock,
+/// conflict gates and displacement as `apply_with_lock`. Returns the bullet's updated record. Mirror of
+/// `hive.tool_verify`.
+pub fn verify_with_lock(
+    vault: &Path,
+    scope: &str,
+    bullet_id: &str,
+    artifact_sha: &str,
+) -> Result<crate::quorum::Meta, String> {
+    let path = scope_path(vault, scope)?;
+    let _lock = PlaybookLock::acquire(&path, std::time::Duration::from_secs(30))?;
+    let sections = load(vault, scope)?;
+    let bullets: Vec<(String, String)> = sections
+        .values()
+        .flatten()
+        .map(|b| (b.id.clone(), b.content.clone()))
+        .collect();
+    if !bullets.iter().any(|(id, _)| id == bullet_id) {
+        return Err(format!("verify: no bullet {bullet_id} in {scope}"));
+    }
+    let meta_file = crate::quorum::meta_path(&path);
+    let meta = crate::quorum::load(&meta_file);
+    let pairs = crate::quorum::conflicts(&bullets);
+    let tag = crate::quorum::Tag {
+        id: bullet_id.to_string(),
+        session: crate::ledger::resolve_session(None),
+        agent: crate::ledger::resolve_agent(None),
+        hint: format!("verify:{artifact_sha}"),
+    };
+    let gates = crate::quorum::gates(&meta, &pairs);
+    let meta = crate::quorum::displace(
+        &meta,
+        &crate::quorum::add_evidence(&meta, &[tag], &gates),
+        &pairs,
+    );
+    crate::quorum::save(&meta_file, &meta)?;
+    crate::quorum::write_report(
+        &vault.join("_meta").join("_conflicts.md"),
+        &crate::common::slugify(scope),
+        &pairs,
+        &meta,
+        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+    )?;
+    meta.get(bullet_id)
+        .cloned()
+        .ok_or_else(|| format!("verify: {bullet_id} has no record"))
+}
+
 /// QUOR-03: the playbook as agents may see it: only bullets whose quorum state is injectable.
 pub fn load_injectable(vault: &Path, scope: &str) -> Result<HashMap<String, Vec<Bullet>>, String> {
     let mut sections = load(vault, scope)?;

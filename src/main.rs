@@ -161,6 +161,12 @@ enum Commands {
         #[command(subcommand)]
         cmd: CodexCommands,
     },
+    /// QUOR-06: record a cross-agent verification of a lesson, backed by an artifact file
+    Verify {
+        scope: String,
+        bullet_id: String,
+        artifact: PathBuf,
+    },
     /// RATCHET-02: draft lint rules from canonical lessons that ban a `token`; accept ships one
     #[command(args_conflicts_with_subcommands = true)]
     Ratchet {
@@ -713,6 +719,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for p in proposals {
                     println!("  proposal written to: {}", p.display());
                 }
+            }
+            Commands::Verify {
+                scope,
+                bullet_id,
+                artifact,
+            } => {
+                let scope = ai_hive::common::validate_slug(&scope)?;
+                let data = fs::read(&artifact)
+                    .map_err(|e| format!("verify: cannot read artifact: {e}"))?;
+                if data.iter().all(|b| b.is_ascii_whitespace()) {
+                    return Err("verify: artifact is empty".into());
+                }
+                let sha = ai_hive::common::sha256(&data);
+                let session = ai_hive::ledger::resolve_session(None);
+                let rec = ai_hive::ace::verify_with_lock(&cfg.vault, &scope, &bullet_id, &sha)?;
+                let kind = rec
+                    .evidence
+                    .iter()
+                    .rev()
+                    .find(|e| e.session == session || e.session == ai_hive::quorum::ANONYMOUS)
+                    .map(|e| e.kind.clone())
+                    .unwrap_or_default();
+                let note = if kind == "verify" {
+                    ""
+                } else {
+                    " (a verify needs a different agent and session than the lesson's author)"
+                };
+                println!(
+                    "verify: {bullet_id} counted as {kind}{note}; artifact sha256 {}; state {}, score {}",
+                    &sha[..12],
+                    rec.state,
+                    ai_hive::quorum::score(&rec)
+                );
             }
             Commands::Ratchet { cmd, scope } => match cmd {
                 Some(RatchetCommands::Accept {

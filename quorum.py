@@ -15,8 +15,20 @@ STATES = ("scout", "quorum", "canonical", "retired")
 DEFAULT_STATE = "canonical"
 FIELDS = ("id", "state", "origin_session", "origin_agent")
 EVIDENCE_FIELDS = ("session", "agent", "kind")
-# QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0)
-WEIGHTS = {"test_pass": 1.0, "confirm": 1.0, "self_tag": 0.35}
+# QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0).
+# QUOR-06: `verify` = a different agent in a different session checked the lesson and left an evidence artifact
+# (review diff, test log, screenshot), recorded as its sha256; without both it never counts.
+WEIGHTS = {"verify": 1.5, "test_pass": 1.0, "confirm": 1.0, "self_tag": 0.35}
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _valid_evidence(e, origin_session, origin_agent):
+    if not isinstance(e, dict) or e.get("kind") not in WEIGHTS or not e.get("session"):
+        return False
+    if e["kind"] != "verify":
+        return True
+    return (bool(SHA256_RE.fullmatch(str(e.get("artifact", "")))) and e["session"] not in (origin_session, ANONYMOUS)
+            and bool(e.get("agent")) and e.get("agent") != origin_agent)
 # QUOR-03: canonical at score >= PROMOTE_SCORE from >= PROMOTE_SESSIONS sessions; >= 2 sessions below it = quorum
 PROMOTE_SCORE = 1.5
 PROMOTE_SESSIONS = 2
@@ -34,8 +46,9 @@ def _clean(rec):
     if "failure_ref" in rec:  # RATCHET-01: absent on legacy records (no restriction), "" on unsourced scouts
         out["failure_ref"] = str(rec.get("failure_ref") or "")
     ev = rec.get("evidence") if isinstance(rec.get("evidence"), list) else []
-    out["evidence"] = [{k: str(e.get(k, "")) for k in EVIDENCE_FIELDS} for e in ev
-                       if isinstance(e, dict) and e.get("kind") in WEIGHTS and e.get("session")]
+    out["evidence"] = [dict({k: str(e.get(k, "")) for k in EVIDENCE_FIELDS},
+                            **({"artifact": str(e["artifact"])} if e.get("artifact") else {}))
+                       for e in ev if _valid_evidence(e, out["origin_session"], out["origin_agent"])]
     return out
 
 
@@ -106,8 +119,13 @@ def add_evidence(meta, tags, gates_by_id=None):
             session, kind = ANONYMOUS, "self_tag"
         else:
             kind = "test_pass" if hint == "test_pass" else "self_tag" if session == rec["origin_session"] else "confirm"
-        if not any(e["session"] == session and e["kind"] == kind for e in rec["evidence"]):
-            rec["evidence"].append({"session": session, "agent": agent, "kind": kind})
+        entry = {"session": session, "agent": agent, "kind": kind}
+        artifact = str(hint)[7:] if str(hint).startswith("verify:") else ""
+        if artifact and _valid_evidence(dict(entry, kind="verify", artifact=artifact),
+                                        rec["origin_session"], rec["origin_agent"]):
+            entry = dict(entry, kind="verify", artifact=artifact)  # QUOR-06; otherwise the plain kind above
+        if not any(e["session"] == session and e["kind"] == entry["kind"] for e in rec["evidence"]):
+            rec["evidence"].append(entry)
         out[bullet_id] = promote(rec, (gates_by_id or {}).get(bullet_id, PROMOTE_SCORE))
     return out
 

@@ -11,7 +11,33 @@ pub const STATES: [&str; 4] = ["scout", "quorum", "canonical", "retired"];
 pub const DEFAULT_STATE: &str = "canonical";
 
 /// QUOR-02: per-session weight; a session counts once, at its strongest kind (same-session repeat adds 0).
-pub const WEIGHTS: [(&str, f64); 3] = [("test_pass", 1.0), ("confirm", 1.0), ("self_tag", 0.35)];
+/// QUOR-06: `verify` = a different agent in a different session checked the lesson and left an evidence
+/// artifact (recorded as its sha256); without both it never counts.
+pub const WEIGHTS: [(&str, f64); 4] = [
+    ("verify", 1.5),
+    ("test_pass", 1.0),
+    ("confirm", 1.0),
+    ("self_tag", 0.35),
+];
+
+/// Mirror of `quorum._valid_evidence`: a verify needs a sha256 artifact, a session other than the origin's
+/// (and not anonymous) and an agent other than the origin's.
+fn valid_evidence(e: &Evidence, origin_session: &str, origin_agent: &str) -> bool {
+    if weight(&e.kind).is_none() || e.session.is_empty() {
+        return false;
+    }
+    if e.kind != "verify" {
+        return true;
+    }
+    let sha_ok = e.artifact.as_deref().is_some_and(|a| {
+        a.len() == 64 && a.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+    });
+    sha_ok
+        && e.session != origin_session
+        && e.session != ANONYMOUS
+        && !e.agent.is_empty()
+        && e.agent != origin_agent
+}
 
 /// QUOR-03: canonical at score >= PROMOTE_SCORE from >= PROMOTE_SESSIONS sessions; >= 2 sessions below it = quorum.
 pub const PROMOTE_SCORE: f64 = 1.5;
@@ -58,6 +84,9 @@ pub struct Evidence {
     #[serde(default)]
     pub agent: String,
     pub kind: String,
+    /// QUOR-06: sha256 of the verification artifact; only on `verify` evidence
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
 }
 
 /// Field order is the wire order: byte-identical to `quorum.dumps`.
@@ -118,8 +147,8 @@ pub fn load(path: &Path) -> MetaMap {
         .filter_map(|l| serde_json::from_str::<Meta>(l).ok())
         .filter(|m| STATES.contains(&m.state.as_str()))
         .map(|mut m| {
-            m.evidence
-                .retain(|e| weight(&e.kind).is_some() && !e.session.is_empty());
+            let (os, oa) = (m.origin_session.clone(), m.origin_agent.clone());
+            m.evidence.retain(|e| valid_evidence(e, &os, &oa));
             (m.id.clone(), m)
         })
         .collect()
@@ -199,16 +228,30 @@ pub fn add_evidence(meta: &MetaMap, tags: &[Tag], gates: &BTreeMap<String, f64>)
         } else {
             "confirm"
         };
+        let mut entry = Evidence {
+            session: session.clone(),
+            agent: t.agent.clone(),
+            kind: kind.into(),
+            artifact: None,
+        };
+        // QUOR-06: a `verify:<sha256>` hint (set only by `hive verify`) counts as verify when valid,
+        // otherwise as the plain kind above
+        if let Some(sha) = t.hint.strip_prefix("verify:") {
+            let candidate = Evidence {
+                kind: "verify".into(),
+                artifact: Some(sha.to_string()),
+                ..entry.clone()
+            };
+            if valid_evidence(&candidate, &rec.origin_session, &rec.origin_agent) {
+                entry = candidate;
+            }
+        }
         if !rec
             .evidence
             .iter()
-            .any(|e| e.session == session && e.kind == kind)
+            .any(|e| e.session == session && e.kind == entry.kind)
         {
-            rec.evidence.push(Evidence {
-                session: session.clone(),
-                agent: t.agent.clone(),
-                kind: kind.into(),
-            });
+            rec.evidence.push(entry);
         }
         promote(rec, *gates.get(&t.id).unwrap_or(&PROMOTE_SCORE));
     }
@@ -478,6 +521,7 @@ mod tests {
             session: "s2".into(),
             agent: "codex".into(),
             kind: "confirm".into(),
+            artifact: None,
         });
         assert!(serde_json::to_string(&m)
             .unwrap()
@@ -715,6 +759,7 @@ mod tests {
             session: s.into(),
             agent: "a".into(),
             kind: k.into(),
+            artifact: None,
         };
         let added = vec!["pit-00001".to_string()];
         let meta = reconcile(&MetaMap::new(), &added, &[], "sess-a", "claude", 0);

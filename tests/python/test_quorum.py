@@ -213,5 +213,68 @@ class QuorumConflictTest(QuorumSidecarTest):
         self.assertIn("type: note", first)
 
 
+class CrossAgentVerifyTest(unittest.TestCase):
+    """QUOR-06: verification by a different agent and session with an artifact weighs 1.5; anything else does not."""
+
+    def setUp(self):
+        import hive
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name)
+        self.patches = [mock.patch.object(ace, "VAULT", self.vault), mock.patch.object(hive, "VAULT", self.vault),
+                        mock.patch.dict("os.environ", {"HIVE_SESSION_ID": "sess-a", "HIVE_AGENT": "claude",
+                                                       "HIVE_LEDGER": str(self.vault / "ledger.jsonl")})]
+        for p in self.patches:
+            p.start()
+        (self.bid,) = ace.apply("demo", [{"type": "ADD", "failure_ref": "commit:abc1234", "section": "pitfalls",
+                                          "content": "verify lesson about cache invalidation"}])["added"]
+        self.artifact = self.vault / "review.diff"
+        self.artifact.write_text("--- a/x\n+++ b/x\n@@ reviewed @@\n", encoding="utf-8")
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def verify(self, session, agent, artifact=None):
+        import hive
+        with mock.patch.dict("os.environ", {"HIVE_SESSION_ID": session, "HIVE_AGENT": agent}):
+            return hive.tool_verify("demo", self.bid, str(artifact or self.artifact))
+
+    def meta(self):
+        return quorum.load(quorum.meta_path(ace.scope_path("demo")))[self.bid]
+
+    def test_cross_agent_verify_outweighs_a_plain_confirm(self):
+        out = self.verify("sess-b", "codex")
+        self.assertIn("counted as verify", out)
+        ev = self.meta()["evidence"]
+        self.assertEqual((ev[0]["kind"], ev[0]["agent"], len(ev[0]["artifact"])), ("verify", "codex", 64))
+        ace.apply("demo", [{"type": "TAG", "id": self.bid, "tag": "helpful"}])  # author self-tag: 0.35
+        rec = self.meta()
+        self.assertEqual((quorum.score(rec), rec["state"]), (1.85, "canonical"), "1.5 + 0.35 clears 1.5")
+
+    def test_plain_confirm_plus_self_tag_stays_quorum(self):
+        with mock.patch.dict("os.environ", {"HIVE_SESSION_ID": "sess-b", "HIVE_AGENT": "codex"}):
+            ace.apply("demo", [{"type": "TAG", "id": self.bid, "tag": "helpful"}])
+        ace.apply("demo", [{"type": "TAG", "id": self.bid, "tag": "helpful"}])
+        rec = self.meta()
+        self.assertEqual((quorum.score(rec), rec["state"]), (1.35, "quorum"))
+
+    def test_same_agent_or_same_session_is_not_a_verify(self):
+        self.assertIn("counted as confirm", self.verify("sess-b", "claude"))  # same agent, other session
+        self.assertIn("counted as self_tag", self.verify("sess-a", "codex"))  # author's own session
+        self.assertNotIn("verify", {e["kind"] for e in self.meta()["evidence"]})
+
+    def test_bad_artifacts_and_forged_sidecar_rows_are_refused(self):
+        empty = self.vault / "empty.log"
+        empty.write_text("  \n", encoding="utf-8")
+        for bad in (self.vault / "missing.log", empty):
+            with self.assertRaises(SystemExit):
+                self.verify("sess-b", "codex", bad)
+        forged = dict(self.meta(), evidence=[{"session": "sess-z", "agent": "codex", "kind": "verify"},
+                                             {"session": "sess-y", "agent": "claude", "kind": "verify",
+                                              "artifact": "a" * 64}])
+        self.assertEqual(quorum._clean(forged)["evidence"], [], "no artifact / author's agent: dropped on load")
+
+
 if __name__ == "__main__":
     unittest.main()

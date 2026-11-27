@@ -936,3 +936,53 @@ fn test_ratchet_cli_propose_accept_lint_and_staged() {
     assert_eq!((bad[0].0.as_str(), bad[0].1), ("tool.py", 3));
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// QUOR-06 through the binary: a different agent + session with an artifact counts as verify (1.5);
+/// the author's own agent does not.
+#[test]
+fn test_verify_cli_cross_agent_weight() {
+    let tmp = std::env::temp_dir().join(format!("hive_verify_cli_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let vault = tmp.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    let run = |args: &[&str], session: &str, agent: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .env("HIVE_DB", tmp.join("hive.sqlite"))
+            .env("HIVE_LEDGER", tmp.join("ledger.jsonl"))
+            .env("HIVE_VAULT", &vault)
+            .env("HIVE_SESSION_ID", session)
+            .env("HIVE_AGENT", agent)
+            .output()
+            .unwrap()
+    };
+    let delta = tmp.join("delta.json");
+    std::fs::write(&delta, r#"{"operations": [{"type": "ADD", "section": "pitfalls", "failure_ref": "commit:abc1234", "content": "verify lesson about cache invalidation"}]}"#).unwrap();
+    assert!(run(
+        &["ace", "apply", "demo", delta.to_str().unwrap()],
+        "sess-a",
+        "claude"
+    )
+    .status
+    .success());
+    let artifact = tmp.join("review.diff");
+    std::fs::write(&artifact, "--- a/x\n+++ b/x\n@@ reviewed @@\n").unwrap();
+    let a = artifact.to_str().unwrap();
+    let same = run(&["verify", "demo", "pit-00001", a], "sess-b", "claude");
+    let out = String::from_utf8_lossy(&same.stdout);
+    assert!(
+        out.contains("counted as confirm"),
+        "{out}{}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+    let cross = run(&["verify", "demo", "pit-00001", a], "sess-c", "codex");
+    let out = String::from_utf8_lossy(&cross.stdout);
+    assert!(
+        out.contains("counted as verify") && out.contains("state canonical"),
+        "{out}"
+    );
+    assert!(!run(&["verify", "demo", "pit-99999", a], "sess-d", "codex")
+        .status
+        .success());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
