@@ -50,7 +50,7 @@ All components are implemented natively in Rust for instant performance (<1 ms s
   - a project boost of 2.0 when the note belongs to the requested project
 - **Autocut:** hits scoring below 30% of the best are dropped, so agents do not read noise. At 35% it cut a
   correct rank-4 answer; 30% keeps it and adds only 0.3 hits per query on average.
-- Tuned against a golden question set (`python hive.py eval`): Recall@5 1.00 (30/30), MRR 0.833.
+- Tuned against a golden question set (`hive eval`): Recall@5 1.00 (30/30), MRR 0.833.
 
 The index lives outside the vault and carries a schema version; a version change drops and rebuilds it.
 
@@ -98,4 +98,4 @@ returns `isError: true` instead of killing the server.
 | Graph PPR, 3,427 nodes | 32.6 ms | 60 ms |
 | Pre-commit verification suite | 6.2 s | 8.1 s |
 
-Run `hive bench` or `python hive.py bench` for your own numbers.
+Run `hive bench` for your own numbers.

@@ -5,7 +5,7 @@ read-only: it reports, you or an agent fix.
 
 ```bash
 python lint.py [vault]        # exit code 1 if any ERROR
-python hive.py lint           # same report
+hive lint                    # same report
 ```
 
 Both work under `python -I`, the way agents and git hooks launch them. As a git pre-commit hook

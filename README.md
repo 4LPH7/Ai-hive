@@ -109,7 +109,7 @@ flowchart LR
         AG["Antigravity"]
     end
 
-    subgraph Hive["🐝 hive (Rust · Python fallback)"]
+    subgraph Hive["🐝 hive (Rust engine)"]
         direction TB
         MCP["read-only stdio MCP<br/>context · search · graph<br/>status · lint · skill"]
         LOOP["learning loop<br/>traces · codices · quorum<br/>curate · governance"]
@@ -166,12 +166,12 @@ cargo run --release -- status  # index the vault, report graph freshness
 <summary><img src="assets/readme/logos/python.svg" height="16" alt=""> <b>Pure Python</b> (stdlib only, zero install)</summary>
 
 ```bash
-python -m unittest discover    # tests/python/; no network or model
-python hive.py status          # uses the native binary when available
-HIVE_FORCE_PYTHON=1 python hive.py status   # macOS/Linux
+cargo test                      # unit and integration tests, no network or model
+cargo run --release -- status   # index the vault and report graph freshness
+python hive.py status           # launcher: runs the release binary (build it first)
 ```
 
-In PowerShell, set `$env:HIVE_FORCE_PYTHON = "1"`, then run `python hive.py status`.
+Set `HIVE_BIN` to point the launchers at a binary elsewhere.
 
 </details>
 

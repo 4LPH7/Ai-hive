@@ -23,12 +23,12 @@ uses can be changed with an environment variable:
 ```bash
 git clone https://github.com/4LPH7/Hive_Mind.git D:\PROJECTS\Hive_Mind
 cd D:\PROJECTS\Hive_Mind
-python -m unittest discover  # Python suite: tests/python/
+cargo test  # Rust unit and integration suite
 ```
 
 All tests use temporary folders; none touch your vault.
 
-Contributors: enable the repo's pre-commit gates (fmt, clippy, `cargo test`, unittest) once per clone with
+Contributors: enable the repo's pre-commit gates (fmt, clippy, `cargo test`) once per clone with
 `git config core.hooksPath .githooks`. They run through `scripts/testcache.py`, which reuses a pass recorded
 for the same HEAD, uncommitted diff and command (stored in `.git/hive-testcache.json`), so repeating a commit
 attempt or re-running CI on a tested commit costs seconds. Failures always re-run; force a real run with
