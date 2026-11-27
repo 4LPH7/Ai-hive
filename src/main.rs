@@ -1,4 +1,4 @@
-use ai_hive::ace::{apply_with_lock, format_bullets, load, select_bullets, DeltaOps};
+use ai_hive::ace::{apply_with_lock, load, DeltaOps};
 use ai_hive::bench::run_bench;
 use ai_hive::common::{default_db_path, load_config};
 use ai_hive::eval::run_eval;
@@ -239,18 +239,20 @@ enum AceCommands {
     },
     /// Show bullets that hive_context would inject
     Show { scope: String, task: Option<String> },
-    /// SessionStart hook
-    HookStart {
-        #[arg(default_value = "global")]
-        scope: String,
-    },
-    /// Stop hook
-    HookStop {
-        #[arg(default_value = "global")]
-        scope: String,
-        #[arg(long)]
-        diff: bool,
-    },
+    /// SessionStart hook: reads the client's hook JSON on stdin (scope defaults to the cwd's project)
+    HookStart { scope: Option<String> },
+    /// Stop hook: hot-file traces and the ACE checkpoint decision (hook JSON on stdin)
+    HookStop { scope: Option<String> },
+}
+
+/// The hook JSON a client pipes to a hook; nothing when stdin is a terminal (a manual run).
+fn hook_input() -> ai_hive::hooks::HookInput {
+    use std::io::{IsTerminal, Read};
+    let mut buf = String::new();
+    if !std::io::stdin().is_terminal() {
+        let _ = std::io::stdin().read_to_string(&mut buf);
+    }
+    ai_hive::hooks::HookInput::parse(&buf)
 }
 
 /// Ratchet scopes: the given one, else `global` plus every project with a playbook (sorted).
@@ -841,7 +843,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Commands::Ace { cmd } => {
-                let vault = cfg.vault;
+                let vault = cfg.vault.clone();
                 match cmd {
                     AceCommands::Apply { scope, ops_file } => {
                         let json_str = if let Some(path) = ops_file {
@@ -878,47 +880,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("ace: applied {} changes to {}", changed, scope);
                     }
                     AceCommands::Show { scope, task } => {
-                        let sections = ai_hive::ace::load_injectable(&vault, &scope)?;
-                        let t = task.as_deref().unwrap_or("");
-                        let bullets = select_bullets(&sections, t, 12);
-                        println!("{}", format_bullets(&bullets));
-                    }
-                    AceCommands::HookStart { scope } => {
-                        let sections = ai_hive::ace::load_injectable(&vault, &scope)?;
-                        let bullets = select_bullets(&sections, "", 8);
-                        let bullet_ids: Vec<String> =
-                            bullets.iter().map(|b| b.id.clone()).collect();
-                        ai_hive::ledger::record(
-                            &cfg.ledger,
-                            "inject",
-                            &scope,
-                            "hook-start",
-                            &[],
-                            &bullet_ids,
-                            0.0,
-                            None,
-                            None,
+                        let mut scopes = vec!["global".to_string()];
+                        if scope != "global" {
+                            scopes.push(scope);
+                        }
+                        let rows = ai_hive::ace::select(
+                            &vault,
+                            &scopes,
+                            task.as_deref().unwrap_or(""),
+                            ai_hive::ace::INJECT_LIMIT,
                         );
-                        if !bullets.is_empty() {
-                            println!("[ACE Playbook ({})]\n{}", scope, format_bullets(&bullets));
+                        if rows.is_empty() {
+                            println!("(empty playbook)");
+                        } else {
+                            println!("{}", ai_hive::ace::format_rows(&rows));
                         }
                     }
-                    AceCommands::HookStop { scope, diff } => {
-                        ai_hive::ledger::record(
-                            &cfg.ledger,
-                            "reflect",
-                            &scope,
-                            "hook-stop",
-                            &[],
-                            &[],
-                            0.0,
-                            None,
-                            None,
-                        );
-                        println!(
-                            "ace: stop hook triggered for scope '{}' (diff={})",
-                            scope, diff
-                        );
+                    AceCommands::HookStart { scope } => {
+                        // a hook never fails the session: errors are reported, exit stays 0
+                        let input = hook_input();
+                        if let Some(out) = ai_hive::hooks::start(&cfg, &input, scope.as_deref()) {
+                            println!("{out}");
+                        }
+                    }
+                    AceCommands::HookStop { scope } => {
+                        let input = hook_input();
+                        if let Some(out) = ai_hive::hooks::stop(&cfg, &input, scope.as_deref()) {
+                            println!("{out}");
+                        }
                     }
                 }
             }

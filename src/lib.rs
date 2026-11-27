@@ -7,6 +7,7 @@ pub mod curate;
 pub mod eval;
 pub mod governance;
 pub mod graph;
+pub mod hooks;
 pub mod index;
 pub mod ledger;
 pub mod lint;

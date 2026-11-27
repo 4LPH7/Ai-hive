@@ -1165,3 +1165,78 @@ fn test_verify_cli_cross_agent_weight() {
         .success());
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// The ACE hooks through the binary with real hook stdin JSON (pit-00013: a hook that ignored stdin silently
+/// disabled the checkpoint): start injects lessons as SessionStart JSON; stop blocks once 25+ tool calls with
+/// an edit ran, then not again for the same session; `stop_hook_active` never blocks.
+#[test]
+fn test_ace_hooks_read_stdin_and_checkpoint_once() {
+    use std::io::Write;
+    let tmp = std::env::temp_dir().join(format!("hive_hooks_cli_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let vault = tmp.join("vault");
+    std::fs::create_dir_all(vault.join("_meta")).unwrap();
+    std::fs::write(
+        vault.join("_meta").join("playbook.md"),
+        "## commands\n- [cmd-00001] seen=3 helpful=3 harmful=0 :: write JSON to a file, not echo\n",
+    )
+    .unwrap();
+    let run = |args: &[&str], stdin: &str| {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .env("HIVE_DB", tmp.join("hive.sqlite"))
+            .env("HIVE_LEDGER", tmp.join("ledger.jsonl"))
+            .env("HIVE_VAULT", &vault)
+            .env("HIVE_PROJECTS", tmp.join("projects"))
+            .env("HIVE_ACE_STATE", tmp.join("ace-state.json"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "a hook never fails the session");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let start = run(
+        &["ace", "hook-start"],
+        r#"{"cwd": "C:/elsewhere", "session_id": "s1"}"#,
+    );
+    let v: serde_json::Value = serde_json::from_str(start.trim()).unwrap();
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(
+        ctx.contains("- [cmd-00001] (global/commands, +3/-0) write JSON to a file"),
+        "{ctx}"
+    );
+    let transcript = tmp.join("t.jsonl");
+    let tool = |name: &str| {
+        serde_json::json!({"message": {"content": [{"type": "tool_use", "id": "x", "name": name, "input": {}}]}})
+            .to_string()
+    };
+    let lines: Vec<String> = (0..30)
+        .map(|i| tool(if i == 0 { "Edit" } else { "Read" }))
+        .collect();
+    std::fs::write(&transcript, lines.join("\n")).unwrap();
+    let payload =
+        serde_json::json!({"session_id": "s1", "transcript_path": transcript}).to_string();
+    let first = run(&["ace", "hook-stop"], &payload);
+    assert!(
+        first.contains(r#""decision":"block""#) && first.contains("30 tool calls"),
+        "{first}"
+    );
+    assert_eq!(
+        run(&["ace", "hook-stop"], &payload).trim(),
+        "",
+        "checkpoint fires once per 25 calls"
+    );
+    let active = serde_json::json!({"session_id": "s2", "transcript_path": transcript, "stop_hook_active": true});
+    assert_eq!(run(&["ace", "hook-stop"], &active.to_string()).trim(), "");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
