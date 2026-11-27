@@ -57,7 +57,7 @@ before it repeats the mistake:
 | ✂️ **Concise output** | Search, graph and lint return short results by default; request full detail when needed | `src/mcp/tools.rs` |
 | 📦 **Artifact offload** | Large MCP results are secret-scrubbed and cached outside the vault and project repositories; old files are purged on writes | `artifact.rs`, `artifacts.py` |
 | 🗳️ **Quorum** | New lessons start as *scouts*. Only bullets backed by 2+ sessions with score ≥ 1.5 become *canonical* and reach agents | `quorum.rs`, `quorum.py` |
-| ⚔️ **Conflicts** | Contradicting lessons are detected; a challenger must beat the incumbent by +1.0. Losers are hidden, never deleted | `curate.rs`, `_meta/_conflicts.md` |
+| ⚔️ **Conflicts** | Contradicting lessons are detected; a challenger must beat the incumbent by +1.0. Losers are hidden, never deleted | `quorum.rs`, `_meta/_conflicts.md` |
 | 🛡️ **Governance** | `hive quarantine` pulls a session's or agent's output from every read path at once, reversibly. `hive audit` shows the full provenance chain | `governance.rs` |
 | 🧠 **ACE playbooks** | Deterministic delta merges of lessons with helpful and harmful counters, time decay, and atomic locking | `ace.rs`, `skills/hive-ace` |
 
@@ -112,7 +112,7 @@ flowchart LR
     subgraph Hive["🐝 hive (Rust engine)"]
         direction TB
         MCP["read-only stdio MCP<br/>context · search · graph<br/>status · lint · skill"]
-        LOOP["learning loop<br/>traces · codices · quorum<br/>curate · governance"]
+        LOOP["learning loop<br/>traces · codices · quorum<br/>governance"]
         IDX[("hive.sqlite<br/>FTS5 + traces<br/>disposable, self-healing")]
     end
 
@@ -122,7 +122,6 @@ flowchart LR
         LD[("ledger.jsonl")]
     end
 
-    LLM["OmniRoute<br/>hive-private · fast · deep"]
 
     Agents -- "MCP stdio" --> MCP
     Agents -- "notes, codices" --> V
@@ -131,7 +130,6 @@ flowchart LR
     GJ --> MCP
     LD --> LOOP
     LOOP -- "proposals only" --> V
-    LOOP -. "secret-scrubbed" .-> LLM
 ```
 
 </details>
@@ -226,19 +224,6 @@ See [`examples/antigravity-mcp_config.json`](examples/antigravity-mcp_config.jso
    ```toml
    vault = "/path/to/Obsidian/Vault"
    projects = "/path/to/Projects"
-
-   [llm]
-   enabled = true
-   base_url = "http://127.0.0.1:20128/v1"   # OmniRoute
-   timeout_ms = 120000
-
-   [llm.combos]
-   private = "hive-private"
-   fast = "hive-fast"
-   deep = "hive-deep"
-
-   [projects.my-secret-repo]
-   llm_privacy = "private"   # hard-lock: never leaves localhost
    ```
 
 4. **Defaults:** `~/Documents/Vault`, with the index in `%LOCALAPPDATA%\hive\` or `~/.cache/hive/`
@@ -273,7 +258,6 @@ Vault content is read-only through MCP. `hive_skill` may install a requested ski
 | `hive codex write <project> <record.json>` | Seal a session checkpoint into an immutable codex |
 | `hive handoff write <project> <record.json>` | Write a bounded handoff; read it with `hive context <project> --handoff <id>` |
 | `hive ace apply <scope> <delta.json>` | Merge playbook lessons deterministically (scouts by default) |
-| `hive curate [--conflicts] [--dry-run]` | LLM-assisted curation and conflict judging, proposals to `inbox/` only |
 | `hive quarantine --session <id> \| --agent <a> [--since]` · `--release <rule>` | Reversibly pull a bad actor's output from every read path |
 | `hive audit <bullet-id \| trace:<n> \| codex-stem>` | Provenance chain: who wrote it, which sessions backed it, integrity |
 | `hive ledger [score \| --coverage]` | Session telemetry and objective outcome scoring |
@@ -311,7 +295,7 @@ Vault content is read-only through MCP. `hive_skill` may install a requested ski
 ## 🗺️ Roadmap
 
 - [x] Native Rust core, Python parity mirror, read-only MCP
-- [x] ACE playbooks, outcome scoring, gap mining, OmniRoute curation
+- [x] ACE playbooks, outcome scoring, gap mining
 - [x] **v2.6:** stigmergic traces and immutable codices
 - [x] **v2.7:** quorum promotion, conflict cross-inhibition, quarantine, audit, self-healing index
 - [x] **v2.7.1:** role-aware handoffs, concise MCP responses and large-result artifact offload

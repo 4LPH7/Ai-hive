@@ -111,16 +111,6 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Run OmniRoute-backed curation proposing merges and contradiction flags into inbox/
-    Curate {
-        #[arg(long)]
-        project: Option<String>,
-        #[arg(long)]
-        dry_run: bool,
-        /// QUOR-05: judge playbook conflicts and write a cited proposal to inbox/ only
-        #[arg(long)]
-        conflicts: bool,
-    },
     /// ACE playbook curator operations
     Ace {
         #[command(subcommand)]
@@ -478,61 +468,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "  proposal: [{}] \"{}\" (count={}) -> {}",
                         p.hash, p.representative, p.count, p.file
                     );
-                }
-            }
-            Commands::Curate {
-                project,
-                dry_run,
-                conflicts: true,
-            } => {
-                let res = ai_hive::curate::run_curate_conflicts(
-                    &cfg.vault,
-                    project.as_deref(),
-                    dry_run,
-                    cli.config.as_deref(),
-                    None,
-                )?;
-                if res.skipped {
-                    println!(
-                        "curate --conflicts: {} ({})",
-                        res.model,
-                        res.reason.unwrap_or_default()
-                    );
-                } else {
-                    println!(
-                        "curate --conflicts: model={} conflicts={} verdicts={}",
-                        res.model, res.conflicts, res.verdicts
-                    );
-                    if let Some(file) = res.proposal_file {
-                        let verb = if res.dry_run {
-                            "would write (dry run)"
-                        } else {
-                            "proposal written to"
-                        };
-                        println!("  {verb}: {}", file);
-                    }
-                }
-            }
-            Commands::Curate {
-                project, dry_run, ..
-            } => {
-                let res = ai_hive::curate::run_curate(
-                    &cfg.ledger,
-                    &cfg.vault,
-                    project.as_deref(),
-                    dry_run,
-                    cli.config.as_deref(),
-                )?;
-                if res.skipped {
-                    println!("curate: {} ({})", res.model, res.reason.unwrap_or_default());
-                } else {
-                    println!(
-                        "curate: model={} merges={} contradictions={} drifts={} aliases={} (dry_run={})",
-                        res.model, res.merges_count, res.contradictions_count, res.adr_drifts_count, res.alias_proposals_count, res.dry_run
-                    );
-                    if let Some(file) = res.proposal_file {
-                        println!("  proposal written to: {}", file);
-                    }
                 }
             }
             Commands::Trace { cmd } => {

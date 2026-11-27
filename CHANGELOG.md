@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - v2.8.0 (Phase 8 addendum)
 
+### Removed (ponytail audit)
+- `src/llm.rs` and `src/curate.rs` (OmniRoute curator, `hive curate`): `ureq` dependency dropped. Conflict judging stays in `quorum`. Restore from git history if a curator returns.
+
 ### Changed (untangle, Rust is the only engine)
 - The Python mirrors of the engine are removed. `hive.py`, `ace.py` and `lint.py` are launchers that run the
   native binary (`HIVE_BIN`, then `target/release/hive`, then `hive` on PATH), so existing configs keep working.

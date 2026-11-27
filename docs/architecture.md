@@ -14,7 +14,6 @@ and rebuildable from disk.
 | ACE Curator & Locks | `src/ace.rs` | `ace.py` | CLI & session hooks | Playbooks under atomic `PlaybookLock` |
 | Session Telemetry & Scorer | `src/ledger.rs` | `ledger.py` | Session hooks & CLI (`hive ledger`) | `~/.cache/hive/ledger.jsonl` |
 | Gap Miner | `src/miner.rs` | `miner.py` | CLI (`hive mine`) | Structured proposal notes in `vault/inbox/` |
-| OmniRoute Gateway & Curator | `src/llm.rs`, `src/curate.rs` | `llm.py`, `curate.py` | CLI (`hive curate`) | Proposal notes in `vault/inbox/` (never canonical) |
 | Vault Linter & Pre-Commit | `src/lint.rs`, `src/main.rs` | `lint.py` | CLI (`hive pre-commit`) | Nothing (read-only verification gate) |
 
 All components are implemented natively in Rust for instant performance (<1 ms startup) and mirrored in pure standard-library Python (3.10+) for zero-dependency portability.
