@@ -107,7 +107,7 @@ class HandoffViewTest(unittest.TestCase):
         self.assertIn("> - serde_yaml frontmatter", view)
         self.assertIn("> - artifact:" + "a" * 64, view)
         self.assertIn("> - HAND-01 schema", view)
-        self.assertTrue(view.rstrip().endswith(str(p.resolve())))
+        self.assertTrue(view.rstrip().endswith(__import__("os").path.abspath(p)))
         tiny = codex.handoff_view(self.vault, "demo", p.stem, budget=10)  # the core never yields
         self.assertIn("> - serde_yaml frontmatter", tiny)
         self.assertIn("full envelope:", tiny)
