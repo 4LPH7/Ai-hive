@@ -21,8 +21,8 @@ uses can be changed with an environment variable:
 ## Step 2: Get the code and run the tests
 
 ```bash
-git clone https://github.com/4LPH7/ai-hive.git D:\PROJECTS\ai-hive
-cd D:\PROJECTS\ai-hive
+git clone https://github.com/4LPH7/Hive_Mind.git D:\PROJECTS\Hive_Mind
+cd D:\PROJECTS\Hive_Mind
 python -m unittest discover  # Python suite: tests/python/
 ```
 

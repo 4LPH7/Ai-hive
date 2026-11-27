@@ -1,21 +1,30 @@
-MIT License
+Business Source License 1.1
 
-Copyright (c) 2026 4LPH7
+Licensor:             4LPH7 (ARUL G)
+Licensed Work:        Hive Mind (ai-hive), including the hive-ace skill and all source in this repository.
+Additional Use Grant: You may use the Licensed Work for any purpose except offering it, or any
+                      derivative, to third parties as a commercial product, hosted service, or
+                      skill/plugin marketplace listing that competes with the Licensor's offerings.
+                      Personal, internal, research and evaluation use is permitted.
+Change Date:          2030-11-27
+Change License:       Apache License, Version 2.0
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Terms
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+The Licensor hereby grants you the right to copy, modify, create derivative works, redistribute, and make
+non-production use of the Licensed Work. The Licensor may make an Additional Use Grant, above, which
+permits production use in the cases it describes.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Effective on the Change Date, or the fourth anniversary of the first publicly available distribution of a
+specific version of the Licensed Work under this License, whichever comes first, the Licensor grants you the
+rights of the Change License for that version.
+
+Required notice: Copyright (c) 2026 4LPH7 (ARUL G)
+
+Licensed Work and derivatives that are offered to third parties in the manner the Additional Use Grant
+prohibits require a separate commercial license from the Licensor.
+
+-----------------------------------------------------------------------------
+
+The Business Source License 1.1 text follows the standard BSL template published by MariaDB plc
+(https://mariadb.com/bsl11/). Replace this summary with the full standard text before publishing.

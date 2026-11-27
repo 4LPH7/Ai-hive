@@ -7,7 +7,7 @@ name = "ai-hive"
 version = "2.5.0"
 description = "Shared memory for all AI coding agents (Obsidian vault + graphify code graphs)"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "BUSL-1.1" }
 requires-python = ">=3.10"
 authors = [
     { name = "4LPH7" }
@@ -18,7 +18,6 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Operating System :: OS Independent",
-    "License :: OSI Approved :: MIT License",
 ]
 
 [project.urls]
