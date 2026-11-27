@@ -95,15 +95,15 @@ Ready-made snippets are in [`examples/`](../examples).
 **Claude Code** (`~/.claude.json`, user scope):
 
 ```bash
-claude mcp add --scope user --transport stdio hive -- C:\Python315\python.exe -I D:\PROJECTS\ai-hive\hive.py serve
+claude mcp add --scope user --transport stdio hive -- D:\PROJECTS\Hive_Mind\target\release\hive.exe serve
 ```
 
 **Codex** (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.hive]
-command = 'C:\Python315\python.exe'
-args = ['-I', 'D:\PROJECTS\ai-hive\hive.py', 'serve']
+command = 'D:\PROJECTS\Hive_Mind\target\release\hive.exe'
+args = ['serve']
 ```
 
 **Antigravity** (`~/.gemini/config/mcp_config.json`): see `examples/antigravity-mcp_config.json`.
@@ -128,8 +128,8 @@ with `hive-ace`.
 ## Step 7: Turn on self-improvement (ACE)
 
 1. Install the skill for each agent: copy `skills/hive-ace/` to `~/.claude/skills/`, `~/.codex/skills/`
-   and your Antigravity skills folder. Replace the `D:/PROJECTS/ai-hive` and `D:\Valut\OBS` paths inside
-   `SKILL.md` with yours.
+   and your Antigravity skills folder. The skill reads the vault from the `HIVE_VAULT` environment variable,
+   so set that to your vault folder; it contains no paths to edit.
 2. Add the Claude Code hooks from `examples/claude-settings-hooks.json` to `~/.claude/settings.json`.
    Append them next to any hooks you already have; do not replace the arrays.
    - `SessionStart` runs `ace.py hook-start`: the top 12 playbook lessons go into the session's context.
