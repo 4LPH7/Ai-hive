@@ -15,10 +15,16 @@ pub fn slugify(name: &str) -> String {
     name.trim().to_lowercase().replace(' ', "-")
 }
 
+/// A slug is `slugify`'d and then safe as a single path segment: lowercase alphanumerics, `.`, `_`, `-`, and not
+/// `.` or `..`. Used for every project folder name.
+pub fn is_safe_slug(s: &str) -> bool {
+    let re = Regex::new(r"^[a-z0-9._-]+$").unwrap();
+    re.is_match(s) && s != "." && s != ".."
+}
+
 pub fn validate_slug(name: &str) -> Result<String, String> {
     let s = slugify(name);
-    let re = Regex::new(r"^[a-z0-9._-]+$").unwrap();
-    if !re.is_match(&s) || s == "." || s == ".." {
+    if !is_safe_slug(&s) {
         return Err(format!("bad slug {:?}", name));
     }
     Ok(s)
