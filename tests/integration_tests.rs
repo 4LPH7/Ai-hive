@@ -413,7 +413,7 @@ fn test_score_session_rust_success_and_failure() {
 
     // Score success
     let res =
-        ai_hive::ledger::score_session(&ledger, &vault, Some("session-rust-1"), 0, None, None)
+        ai_hive::scoring::score_session(&ledger, &vault, Some("session-rust-1"), 0, None, None)
             .unwrap();
     assert!(res.scored);
     assert_eq!(res.reward, 1);
@@ -441,7 +441,7 @@ fn test_score_session_rust_success_and_failure() {
     );
 
     let res_fail =
-        ai_hive::ledger::score_session(&ledger, &vault, Some("session-rust-2"), 1, None, None)
+        ai_hive::scoring::score_session(&ledger, &vault, Some("session-rust-2"), 1, None, None)
             .unwrap();
     assert!(res_fail.scored);
     assert_eq!(res_fail.reward, -1);
