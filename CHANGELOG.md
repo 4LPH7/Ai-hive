@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   note. Bad ids, tampered notes, plain codices and quarantined writers are refused.
 - **Concise MCP responses (DETAIL-01)**: `detail: concise|detailed` on `hive_search`, `hive_graph` and
   `hive_lint`; MCP defaults to concise, the CLI and `tool_*` functions stay detailed (bytes pinned by
-  `tests/fixtures/detail_snapshots.json`). New `lint.format_concise`. Gate: concise/detailed = 0.26 on the fixture.
+  `tests/fixtures/detail_snapshots.json`). New `lint.format_concise`. Gate: concise/detailed = 0.18 on the fixture.
 - **Artifact offload (DETAIL-02, `src/artifact.rs`, `artifacts.py`)**: tool results over 2,000 est tokens
   (except `hive_context` and errors) are secret-scrubbed into a content-addressed cache outside the vault
   (`HIVE_ARTIFACTS`, else `LOCALAPPDATA`/`XDG_CACHE_HOME` `hive/artifacts`), purged after 7 days; the response
