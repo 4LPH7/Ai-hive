@@ -5,10 +5,10 @@
 <br>
 
 [![Rust](https://img.shields.io/badge/core-Rust-FF7A1A?style=for-the-badge&logo=rust&logoColor=white&labelColor=0B0F17)](src/)
-[![Python](https://img.shields.io/badge/fallback-Python%20stdlib-FFD43B?style=for-the-badge&logo=python&logoColor=white&labelColor=0B0F17)](hive.py)
+[![Python](https://img.shields.io/badge/launchers-Python%20stdlib-FFD43B?style=for-the-badge&logo=python&logoColor=white&labelColor=0B0F17)](hive.py)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20·%20read--only-38BDF8?style=for-the-badge&labelColor=0B0F17)](#-mcp-tools)
 [![Obsidian](https://img.shields.io/badge/memory-Obsidian%20vault-A78BFA?style=for-the-badge&logo=obsidian&logoColor=white&labelColor=0B0F17)](docs/vault-conventions.md)
-[![License: MIT](https://img.shields.io/badge/license-BSL_1.1-34D399?style=for-the-badge&labelColor=0B0F17)](LICENSE)
+[![License: BSL 1.1](https://img.shields.io/badge/license-BSL_1.1-34D399?style=for-the-badge&labelColor=0B0F17)](LICENSE)
 
 **[Quick start](#-quick-start)** ·
 **[How it works](#-how-it-works)** ·
@@ -35,7 +35,7 @@ a quorum, and sealed records that can never be silently edited.
 
 > [!TIP]
 > **Notes stay the single source of truth.** Every index is disposable: delete `hive.sqlite` and the hive
-> rebuilds it. A corrupt index heals itself on the next open.
+> rebuilds it. A corrupt index is deleted and rebuilt on the next open.
 
 ## ⚡ See it think
 
@@ -161,7 +161,7 @@ cargo run --release -- status  # index the vault, report graph freshness
 </details>
 
 <details>
-<summary><img src="assets/readme/logos/python.svg" height="16" alt=""> <b>Pure Python</b> (stdlib only, zero install)</summary>
+<summary><img src="assets/readme/logos/python.svg" height="16" alt=""> <b>Python launchers</b> (stdlib only; they run the binary, they are not an engine)</summary>
 
 ```bash
 cargo test                      # unit and integration tests, no network or model
@@ -169,7 +169,7 @@ cargo run --release -- status   # index the vault and report graph freshness
 python hive.py status           # launcher: runs the release binary (build it first)
 ```
 
-Set `HIVE_BIN` to point the launchers at a binary elsewhere.
+Set `HIVE_BIN` to point the launchers at a binary elsewhere. Python is no longer an engine: `hive.py`, `ace.py` and `lint.py` only exec the native binary.
 
 </details>
 
@@ -289,17 +289,18 @@ Vault content is read-only through MCP. `hive_skill` may install a requested ski
 | BM25 / FTS5 search | ~4 ms |
 | Graph PPR, 1,698 nodes | 7.8 ms |
 | Graph PPR, 3,427 nodes | 32.6 ms |
+| Graph load, 3,427 nodes | ~38 ms (was ~205 ms; regex hoisted in v2.8) |
 | Golden search eval | **Recall@5 30/30** |
 | Live-traces slice for `hive_context` | < 10 ms |
 
 ## 🗺️ Roadmap
 
-- [x] Native Rust core, Python parity mirror, read-only MCP
+- [x] Native Rust core (Python files are launchers only), read-only MCP
 - [x] ACE playbooks, outcome scoring, gap mining
 - [x] **v2.6:** stigmergic traces and immutable codices
 - [x] **v2.7:** quorum promotion, conflict cross-inhibition, quarantine, audit, self-healing index
 - [x] **v2.7.1:** role-aware handoffs, concise MCP responses and large-result artifact offload
-- [ ] Ratchet: turn recurring dead ends into lint rules
+- [x] **v2.8:** ratchet rules from canonical lessons, Rust-only engine, module cycles removed, OmniRoute curator removed, self-healing index deletes corrupt cache
 - [ ] Learned retrieval weights from scored sessions
 
 ## 📚 Documentation
