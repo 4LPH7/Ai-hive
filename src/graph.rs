@@ -63,8 +63,10 @@ pub fn node_prior(n: &Node) -> f64 {
     base * test_mult * path_mult
 }
 
+static CAMEL_BOUNDARY: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+
 pub fn split_ident(text: &str) -> Vec<String> {
-    let re_camel = Regex::new(r"([a-z0-9])([A-Z])").unwrap();
+    let re_camel = CAMEL_BOUNDARY.get_or_init(|| Regex::new(r"([a-z0-9])([A-Z])").unwrap());
     let spaced = re_camel.replace_all(text, "$1 $2");
     crate::tokens::alnum_words(&spaced, 2)
 }
