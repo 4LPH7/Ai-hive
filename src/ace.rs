@@ -200,11 +200,7 @@ pub fn bullet_decay(b: &Bullet, today: chrono::NaiveDate) -> i64 {
 }
 
 pub fn tokenize_words(text: &str) -> HashSet<String> {
-    let re = Regex::new(r"[^A-Za-z0-9]+").unwrap();
-    re.split(text)
-        .map(|s| s.to_lowercase())
-        .filter(|s| s.len() > 1)
-        .collect()
+    crate::tokens::alnum_words(text, 2).into_iter().collect()
 }
 
 pub fn jaccard_similarity(a: &str, b: &str) -> f64 {
@@ -797,11 +793,7 @@ pub fn load_injectable(vault: &Path, scope: &str) -> Result<HashMap<String, Vec<
 }
 
 fn select_tokens(text: &str) -> HashSet<String> {
-    text.to_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|t| t.len() > 2)
-        .map(str::to_string)
-        .collect()
+    crate::tokens::alnum_words(text, 3).into_iter().collect()
 }
 
 /// (scope, section, bullet) rows of the top injectable lessons across scopes: net evidence (minus decay)

@@ -66,12 +66,7 @@ pub fn node_prior(n: &Node) -> f64 {
 pub fn split_ident(text: &str) -> Vec<String> {
     let re_camel = Regex::new(r"([a-z0-9])([A-Z])").unwrap();
     let spaced = re_camel.replace_all(text, "$1 $2");
-    let re_non_alnum = Regex::new(r"[^A-Za-z0-9]+").unwrap();
-    re_non_alnum
-        .split(&spaced)
-        .map(|s| s.to_lowercase())
-        .filter(|s| s.len() > 1)
-        .collect()
+    crate::tokens::alnum_words(&spaced, 2)
 }
 
 #[derive(Debug, Clone, Deserialize)]
